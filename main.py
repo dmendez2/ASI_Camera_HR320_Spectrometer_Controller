@@ -350,7 +350,7 @@ class WavelengthCalibrator():
         d_lambda = self.Dlambda(self.n, self.width, self.lambda_c)
         residuals = np.ones(len(P_measured)) * np.inf
         iter = 0
-        while(np.all(residuals > d_lambda) and iter < 5):
+        while(np.any(residuals > d_lambda) and iter < 5):
             # Compute the Minimum and Maximum Wavelengths With the Current Parameters (Default Manufacturer Parameters with Corrected Central Pixel Position)
             self.Wl_Min = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Min)
             self.Wl_Max = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Max)
@@ -416,7 +416,7 @@ class WavelengthCalibrator():
         d_lambda = self.Dlambda(self.n, self.width, self.lambda_c)
         residuals = np.ones(len(P_measured)) * np.inf
         iter = 0
-        while(np.all(residuals > d_lambda) and iter < 5):
+        while(np.any(residuals > d_lambda) and iter < 5):
             # Get the minimum and maximum wavelength for the current central wavelength
             self.Wl_Min = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Min)
             self.Wl_Max = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Max)
