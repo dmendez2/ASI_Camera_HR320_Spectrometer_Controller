@@ -14,12 +14,15 @@ Window {
     Component.onCompleted: cameraController.initialize_controls()
 
     // File Paths
-    property string dataSavePath: "path/to/data/file.hdf5"
+    property string standardCaptureSavePath: "path/to/data/file.hdf5"
+    property string liveCaptureSavePath: "path/to/data/file.hdf5"
     property string backgroundLoadPath: "path/to/data/file.npy"
     property string nistReferenceFilePath: "path/to/data/file.npy"
     property string heNeFilePath: "path/to/data/file.npy"
     property string neAnchorFilePath: "path/to/data/file.npy"
     property string neCalibrationFilePath: "path/to/data/file.npy"
+    property string saveCachePath: "path/to/cache/file.csv"
+    property string loadCachePath: "path/to/cache/file.csv"
 
     Row {
         id: root
@@ -62,6 +65,10 @@ Window {
             width: root.width * 0.30
             leftPadding: 10
             spacing: 10
+
+            TapHandler {
+                onTapped: root.forceActiveFocus()
+            }
 
             Column{
                 id: cameraControlColumn
@@ -115,6 +122,7 @@ Window {
 
                     SpinBox {
                         id: exposureSpinBox
+                        font.pixelSize: 14
                         anchors.right: masterControlColumn.rightPadding
                         stepSize: 1
                         editable: true
@@ -133,6 +141,16 @@ Window {
                             exposureSpinBox.to = max
                             exposureSlider.value = 300
                             exposureSpinBox.value = 300
+                        }
+                    }
+
+                    Connections {
+                        target: cameraController
+                        function onCanEditControls(status) {
+                            exposureSlider.enabled = status
+                            exposureSpinBox.enabled = status
+                            exposureSpinBox.font.bold = !status
+                            exposureSpinBox.opacity = status ? 1.0 : 0.9
                         }
                     }
                 }
@@ -160,6 +178,7 @@ Window {
 
                     SpinBox {
                         id: gainSpinBox
+                        font.pixelSize: 14
                         stepSize: 1
                         editable: true
                         onValueChanged: {
@@ -179,6 +198,16 @@ Window {
                             gainSpinBox.value = (min + max) / 2
                         }
                     }
+
+                    Connections {
+                        target: cameraController
+                        function onCanEditControls(status) {
+                            gainSlider.enabled = status
+                            gainSpinBox.enabled = status
+                            gainSpinBox.font.bold = !status
+                            gainSpinBox.opacity = status ? 1.0 : 0.9
+                        }
+                    }
                 }
             }
 
@@ -196,7 +225,6 @@ Window {
                 Text {
                     text: "Temperature Control"
                     font.pixelSize: 32       // makes it large
-                    //font.bold: true
                     color: "#D21404"             // red text
                     anchors.left: masterControlColumn.leftPadding
 
@@ -240,8 +268,15 @@ Window {
                         }
                         onToggled: cameraController.setAntiDewHeater(checked)
                     }
-                }
 
+                    Connections {
+                        target: cameraController
+                        function onCanEditControls(status) {
+                            coolerCheck.checkable = status
+                            dewCheck.checkable = status
+                        }
+                    }
+                }
 
                 Text {
                     text: "Target Temperature:"
@@ -265,6 +300,7 @@ Window {
 
                     SpinBox {
                         id: targetTempSpinBox
+                        font.pixelSize: 14
                         stepSize: 1
                         editable: true
                         onValueChanged: {
@@ -282,6 +318,16 @@ Window {
                             targetTempSpinBox.to = max
                             targetTempSpinBox.value = (min + max) / 2
                             targetTempSpinBox.value = (min + max) / 2
+                        }
+                    }
+
+                    Connections {
+                        target: cameraController
+                        function onCanEditControls(status) {
+                            targetTempSlider.enabled = status
+                            targetTempSpinBox.enabled =  status
+                            targetTempSpinBox.font.bold = !status
+                            targetTempSpinBox.opacity = status ? 1.0 : 0.9
                         }
                     }
                 }
@@ -330,7 +376,7 @@ Window {
                 }
 
                 Text {
-                    text: "Data Aquisition"
+                    text: "Data Acquisition"
                     font.pixelSize: 32       // makes it large
                     color: "#D21404"             // red text
                     anchors.left: masterControlColumn.leftPadding
@@ -345,18 +391,88 @@ Window {
                     }
                 }
 
+                // Choice: Capture or Load
+                Row {
+                    spacing: masterControlColumn.width/12
+                    RadioButton {
+                        id: standardCaptureMode
+                        checked: true
+
+                        indicator: Rectangle {
+                            id: standardCaptureCircle
+                            anchors.verticalCenter: standardCaptureMode.verticalCenter
+                            implicitWidth: 20
+                            implicitHeight: 20
+                            radius: width / 2
+                            border.width: 2
+                            border.color: "#555555"
+                            color: "transparent"
+
+                            Rectangle {
+                                anchors.centerIn: standardCaptureCircle
+                                width: standardCaptureCircle.width / 2
+                                height: standardCaptureCircle.height / 2
+                                radius: width / 2
+                                color: standardCaptureMode.checked ? "#cdcdcd" : "transparent"
+                            }
+                        }
+
+                        contentItem: Text {
+                            text: "Standard Capture"
+                            color: "#cdcdcd"
+                            font.bold: true
+                            font.pixelSize: 14
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: standardCaptureMode.indicator.width + 6
+                        }
+                    }
+
+                    RadioButton {
+                        id: liveCaptureMode
+
+                        indicator: Rectangle {
+                            id: liveCaptureCircle
+                            anchors.verticalCenter: liveCaptureMode.verticalCenter
+                            implicitWidth: 20
+                            implicitHeight: 20
+                            radius: width / 2
+                            border.width: 2
+                            border.color: "#555555"
+                            color: "transparent"
+
+                            Rectangle {
+                                anchors.centerIn: liveCaptureCircle
+                                width: liveCaptureCircle.width / 2
+                                height: liveCaptureCircle.height / 2
+                                radius: width / 2
+                                color: liveCaptureMode.checked ? "#cdcdcd" : "transparent"
+                            }
+                        }
+
+                        contentItem: Text {
+                            text: "Live Capture"
+                            color: "#cdcdcd"
+                            font.bold: true
+                            font.pixelSize: 14
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: liveCaptureMode.indicator.width + 6
+                        }
+                    }
+                }
+
                 RowLayout{
                     width: masterControlColumn.width * 0.9
+                    visible: standardCaptureMode.checked
 
                     Button {
-                        id: saveFramesButton
+                        id: saveFramesForStandardCaptureButton
                         text: "Save Data To"
-                        onClicked: saveFramesFileDialog.open()
+                        onClicked: saveFramesForStandardCaptureFileDialog.open()
                     }
 
                     Rectangle {
                         Layout.fillWidth: true
-                        height: saveFramesButton.height
+                        height: saveFramesForStandardCaptureButton.height
                         radius: 4
                         border.color: "#888"
                         color: "#f5f5f5"
@@ -366,7 +482,7 @@ Window {
                             anchors.margins: 4
                             verticalAlignment: Text.AlignVCenter
 
-                            text: dataSavePath
+                            text: standardCaptureSavePath
                             elide: Text.ElideLeft     // Clip path nicely
                             clip: true
                         }
@@ -375,12 +491,22 @@ Window {
 
                 RowLayout{
                     width: masterControlColumn.width * 0.9
+                    visible: standardCaptureMode.checked
                     spacing: 10
 
                     Button {
                         id: captureFrameBtn
+                        enabled: false
                         text: "Capture Frame(s)"
                         Layout.fillWidth: true
+                        onClicked: cameraController.request_standard_capture()
+
+                        Connections {
+                            target: cameraController
+                            function onCanStandardCaptureChanged(canCapture) {
+                                captureFrameBtn.enabled = canCapture
+                            }
+                        }
                     }
 
                     Text{
@@ -393,33 +519,151 @@ Window {
 
                     SpinBox {
                         id: n_frame_capture_spin_box
+                        font.pixelSize: 14
                         stepSize: 1
                         editable: true
                         from: 1
                         to: 100
+
+                        onValueChanged: {
+                            n_frame_capture_spin_box.value = value
+                            cameraController.setNStandardCaptureFrames(value)
+                        }
                     }
                 }
 
                 RowLayout{
                     width: masterControlColumn.width * 0.9
+                    visible: liveCaptureMode.checked
+
+                    Button {
+                        id: saveFramesForLiveCaptureButton
+                        enabled: true
+                        text: "Save Data To"
+                        onClicked: saveFramesForLiveCaptureFileDialog.open()
+
+                        Connections {
+                            target: cameraController
+                            function onCanEditLiveCaptureFileChanged(canSave) {
+                                saveFramesForLiveCaptureButton.enabled = canSave
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: saveFramesForLiveCaptureButton.height
+                        radius: 4
+                        border.color: "#888"
+                        color: "#f5f5f5"
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            verticalAlignment: Text.AlignVCenter
+
+                            text: liveCaptureSavePath
+                            elide: Text.ElideLeft     // Clip path nicely
+                            clip: true
+                        }
+                    }
+                }
+
+                RowLayout{
+                    width: masterControlColumn.width * 0.9
+                    visible: liveCaptureMode.checked
                     spacing: 10
 
                     Button {
-                        id: liveCaptureBtn
+                        id: startLiveCaptureBtn
+                        enabled: false
                         text: "Start Live Capture"
                         Layout.fillWidth: true
-                        onClicked: cameraController.start_live_capture()
+                        onClicked: cameraController.request_live_capture_start()
+
+                        Connections {
+                            target: cameraController
+                            function onCanStartLiveCaptureChanged(canStart) {
+                                startLiveCaptureBtn.enabled = canStart
+                            }
+                        }
                     }
 
                     Button {
-                        id: cancelLiveCapture
+                        id: endLiveCaptureBtn
+                        enabled: false
                         text: "End Live Capture"
                         Layout.fillWidth: true
-                        onClicked: cameraController.stop_live_capture()
+                        onClicked: {
+                            cameraController.request_live_capture_end()
+                            endLiveCaptureBtn.enabled = false
+                            saveFramesForLiveCaptureButton.enabled = true
+                        }
+
+                        Connections {
+                            target: cameraController
+                            function onCanEndLiveCaptureChanged(canEnd) {
+                                endLiveCaptureBtn.enabled = canEnd
+                            }
+                        }
                     }
 
                 }
 
+            RowLayout{
+                id: dataToCollectRow
+
+                Text{
+                    text: "Data to Collect: "
+                    font.bold: true
+                    color: "#cdcdcd"
+                    font.pixelSize: 14
+                }
+
+                    Text{
+                        text: "Raw Data"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    CheckBox {
+                        id: rawCheckBox
+                        checked: false
+                        height: 30
+                        width: masterControlColumn.width*0.6
+
+                        onCheckedChanged: {
+                            cameraController.request_can_save_raw(checked)
+                        }
+                    }
+
+                    Text{
+                        id: test
+                        text: "Wavelength Data"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    CheckBox {
+                        id: wavelengthCheckBox
+                        checked: false
+                        height: 30
+                        width: masterControlColumn.width*0.6
+
+                        onCheckedChanged: {
+                            cameraController.request_can_save_wavelength(checked)
+                        }
+
+                        Connections {
+                            target: cameraController
+                            function onCanEnableWavelengthCheckBox(enabled) {
+                                wavelengthCheckBox.checked = enabled
+                            }
+                        }
+                    }
+                }
             }
 
             Column{
@@ -528,7 +772,11 @@ Window {
                     Button {
                         id: captureBtn
                         text: "Capture Background"
-                        onClicked: cameraController.capture_background()
+                        onClicked: {
+                            cameraController.request_capture_background()
+                            subtractBtn2.enabled = false
+                            resetBtn2.enabled = false
+                        }
                         Layout.fillWidth: true
                     }
 
@@ -542,13 +790,14 @@ Window {
 
                         SpinBox {
                             id: n_frame_background_spin_box
+                            font.pixelSize: 14
                             stepSize: 1
                             editable: true
                             from: 1
                             to: 100
                             onValueChanged: {
-                                targetTempSlider.value = value
-                                cameraController.setNFrames(value)
+                                n_frame_background_spin_box.value = value
+                                cameraController.setNBackgroundFrames(value)
                             }
                         }
 
@@ -561,7 +810,7 @@ Window {
 
                         Connections {
                             target: cameraController
-                            function onCanSaveBackground(canSave) {
+                            function onCanSaveBackgroundChanged(canSave) {
                                 saveButton.enabled = canSave
                             }
                         }
@@ -571,7 +820,7 @@ Window {
                         id: subtractBtn1
                         text: "Subtract Background"
                         enabled: false
-                        onClicked: cameraController.subtract_background()
+                        onClicked: cameraController.request_subtract_background()
 
                         Connections {
                             target: cameraController
@@ -596,7 +845,6 @@ Window {
                     }
                 }
 
-
                 // Load Background controls
                 Column {
                     spacing: 10
@@ -608,7 +856,7 @@ Window {
 
                         Button {
                             id: openBackgroundButton
-                            text: "Open Background"
+                            text: "Load Background"
                             onClicked: openBackgroundDialog.open()
                         }
 
@@ -639,7 +887,7 @@ Window {
                             id: subtractBtn2
                             text: "Subtract Background"
                             enabled: false
-                            onClicked: cameraController.subtract_background()
+                            onClicked: cameraController.request_subtract_background()
 
                         Connections {
                             target: cameraController
@@ -664,7 +912,61 @@ Window {
                         }
                     }
                 }
-        }
+            }
+
+            Column{
+                id: snapshotColumn
+                spacing: 10
+                width: masterControlColumn.width
+
+                Rectangle{
+                    anchors.left: masterControlColumn.left
+                    width: masterControlColumn.width * 0.9
+                    height: 1
+                    color: "#cdcdcd"
+                }
+
+                Text {
+                    text: "Snapshot"
+                    font.pixelSize: 32       // makes it large
+                    //font.bold: true
+                    color: "#D21404"             // red text
+                    anchors.left: parent.leftPadding
+
+                    layer.enabled: true
+                    layer.effect: DropShadow {
+                        color: "#000000"
+                        radius: 4
+                        samples: 8
+                        spread: 0.2
+                        verticalOffset: 1
+                    }
+                }
+
+                RowLayout{
+                    width: masterControlColumn.width * 0.9
+
+                    Button {
+                        id: snapshotCaptureFrameButton
+                        text: "Capture Frame"
+                        Layout.fillWidth: true
+                        onClicked: {
+                            cameraController.request_snapshot()
+                            snapshotSaveFrameButton.enabled = true
+                        }
+                    }
+
+                    Button {
+                        id: snapshotSaveFrameButton
+                        enabled: false
+                        text: "Save Frame"
+                        Layout.fillWidth: true
+                        onClicked: snapshotFileDialog.open()
+                    }
+
+                }
+            }
+
             Column {
                 id: wavelengthCalibrationColumn
                 spacing: 10
@@ -704,6 +1006,7 @@ Window {
 
                     SpinBox {
                         id: centralWavelengthSpinBox
+                        font.pixelSize: 14
                         stepSize: 1.0
                         editable: true
                         from: 400
@@ -848,7 +1151,7 @@ Window {
                         Connections {
                             target: cameraController
                             function onCanCalibrate(isReady) {
-                            calibrationBtn.enabled = isReady
+                                calibrationBtn.enabled = isReady
                             }
                         }
                     }
@@ -975,6 +1278,9 @@ Window {
                                 function onResidualCalculated(residual) {
                                     maxResidualLabel.text = residual.toFixed(4) + " nm"
                                 }
+                                function onNotApplicableResidual(){
+                                    maxResidualLabel.text = "N/A"
+                                }
                             }
                         }
                     }
@@ -1007,134 +1313,68 @@ Window {
 
                             Connections {
                                 target: cameraController
-                                function onIsCalibrated(success) {
-                                    if (success) {
+                                function onIsCalibrated(status) {
+                                    if (status === "Uncalibrated") {
+                                        calibrationStatusLabel.text = "Uncalibrated"
+                                        calibrationStatusLabel.color = "#FF0000"
+                                    }
+                                    else if(status === "Calibrated") {
                                         calibrationStatusLabel.text = "Calibrated"
                                         calibrationStatusLabel.color = "#00FF00"
                                     }
-                                    else {
-                                        calibrationStatusLabel.text = "Uncalibrated"
-                                        calibrationStatusLabel.color = "#FF0000"
+                                    else if (status === "Loaded"){
+                                        calibrationStatusLabel.text = "Loaded"
+                                        calibrationStatusLabel.color = "#87CEEB"
                                     }
                                 }
                             }
                         }
                     }
+                }
             }
-
-
+            Rectangle{
+                color: "#2e2f30"
+                height: 1
+                width: masterControlColumn.width
             }
+        }
 
-            Column {
-                id: cacheColumn
-                spacing: 10
-
-                Rectangle{
-                    anchors.left: masterControlColumn.left
-                    width: masterControlColumn.width * 0.9
-                    height: 1
-                    color: "#cdcdcd"
-                }
-
-                Text {
-                    text: "Cache"
-                    font.pixelSize: 32       // makes it large
-                    //font.bold: true
-                    color: "#D21404"             // red text
-                    anchors.left: parent.leftPadding
-
-                    layer.enabled: true
-                    layer.effect: DropShadow {
-                        color: "#000000"
-                        radius: 4
-                        samples: 8
-                        spread: 0.2
-                        verticalOffset: 1
-                    }
-                }
-
-                RowLayout{
-                    Text{
-                        text: "Save Settings to Cache on Shutdown"
-                        font.bold: true
-                        color: "#cdcdcd"
-                        font.pixelSize: 14
-                    }
-
-                    CheckBox {
-                        checked: true
-                        width: masterControlColumn.width*0.6
-                        height: 30
-                    }
-                }
-
-                RowLayout{
-                    Text{
-                        text: "Load Settings From Cache on Startup"
-                        font.bold: true
-                        color: "#cdcdcd"
-                        font.pixelSize: 14
-                    }
-
-                    CheckBox {
-                        checked: true
-                        width: masterControlColumn.width*0.6
-                        height: 30
-                    }
-                }
-
-                RowLayout {
-                    spacing: 20
-                    width: masterControlColumn.width * 0.9
-
-                    Button {
-                        id: cache_directory_button
-                        text: "Choose Cache Directory"
-                        onClicked: cacheFolderDialog.open()
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: cache_directory_button.height
-                        radius: 4
-                        border.color: "#888"
-                        color: "#f5f5f5"
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            verticalAlignment: Text.AlignVCenter
-
-                            text: currentFilePath
-                            elide: Text.ElideLeft     // Clip path nicely
-                            clip: true
-                        }
-                    }
-                }
-
-            }
-
-    }
-
-            FolderDialog{
-                id: cacheFolderDialog
-                title: "Select a folder"
-                currentFolder: currentFolderPath
-
-                onAccepted: {
-                    currentFolderPath = cacheFolderDialog.folder.toString()
-                    }
-            }
 
             FileDialog{
-                id: saveFramesFileDialog
+                id: saveFramesForStandardCaptureFileDialog
                 title: "Save Data To"
                 fileMode: FileDialog.SaveFile
                 nameFilters: ["HDF5 File (*.hdf5)"]
 
                 onAccepted: {
-                    dataSavePath = saveFramesFileDialog.file.toString()
-                    cameraController.setDataSavePath(dataSavePath)
+                    standardCaptureSavePath = saveFramesForStandardCaptureFileDialog.file.toString()
+                    cameraController.setStandardCaptureSavePath(standardCaptureSavePath)
+                    captureFrameBtn.enabled = true
+                    }
+            }
+
+            FileDialog{
+                id: saveFramesForLiveCaptureFileDialog
+                title: "Save Data To"
+                fileMode: FileDialog.SaveFile
+                nameFilters: ["HDF5 File (*.hdf5)"]
+
+                onAccepted: {
+                    liveCaptureSavePath = saveFramesForLiveCaptureFileDialog.file.toString()
+                    cameraController.setLiveCaptureSavePath(liveCaptureSavePath)
+                    startLiveCaptureBtn.enabled = true
+                    }
+            }
+
+            FileDialog{
+                id: snapshotFileDialog
+                title: "Save Frame To"
+                fileMode: FileDialog.SaveFile
+                nameFilters: ["Numpy File (*.npy)"]
+
+                onAccepted: {
+                    cameraController.request_save_snapshot(snapshotFileDialog.file.toString())
+                    snapshotSaveFrameButton.enabled = false
                     }
             }
 
@@ -1192,11 +1432,15 @@ Window {
                   title: "Select a file"
                   folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                   fileMode: FileDialog.OpenFile
-                  nameFilters: ["Numpy Matrix (*.npy)"]
+                  nameFilters: ["Numpy Matrix (*.npy)", "HDF5 File (*.hdf5)", "H5 File (*.h5)"]
 
                   onAccepted: {
                       backgroundLoadPath = openBackgroundDialog.file.toString()
-                      cameraController.open_background(backgroundLoadPath)
+                      cameraController.load_background_requested(backgroundLoadPath)
+
+                      subtractBtn1.enabled = false
+                      resetBtn1.enabled = false
+                      saveButton.enabled = false
                   }
               }
 
@@ -1205,11 +1449,11 @@ Window {
                   title: "Select a file"
                   folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                   fileMode: FileDialog.OpenFile
-                  nameFilters: ["CSV File (*.csv)"]
+                  nameFilters: ["CSV File (*.csv)", "HDF5 File (*.hdf5)", "H5 File (*.h5)"]
 
                   onAccepted: {
-                      console.log("Opening file:", loadCalibrationDialog.file)
                       cameraController.loadCalibrationFile( loadCalibrationDialog.file)
+                      saveCalibration.enabled = false
                   }
               }
 
@@ -1221,8 +1465,8 @@ Window {
                   nameFilters: ["Numpy Matrix (*.npy)"]
 
                   onAccepted: {
-                      console.log("Saving to:", saveDialog.file)
-                      cameraController.save_background(saveDialog.file)
+                      cameraController.request_save_background(saveDialog.file)
+                      saveButton.enabled = false
                   }
               }
 
@@ -1237,6 +1481,21 @@ Window {
                       console.log("Saving to:", saveCalibrationDialog.file)
                       cameraController.saveCalibrationFile(saveCalibrationDialog.file)
                   }
+              }
+
+              MessageDialog {
+                  id: errorDialog
+                  title: "Error"
+                  text: ""
+
+                  Connections {
+                      target: cameraController
+                      function onErrorOccurred(message) {
+                          errorDialog.text = message
+                          errorDialog.open()
+                      }
+                  }
+
               }
             }
     }
