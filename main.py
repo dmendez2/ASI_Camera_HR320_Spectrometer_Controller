@@ -101,7 +101,7 @@ class WavelengthCalibrator():
         self.F = 320 # Focal Length of Spectrograph (mm)
         self.Dv = 24 * (np.pi/180) # Deviation Angle (Radians)
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
-        self.width = 68 # Width of the Grating (mm)
+        self.width = 58 # Width of the Grating (mm)
 
         ### Initial Parameters According to ZWO Astro ASI2600 Pro Camera Documentation ###
         self.Pw = 0.00376 # Pitch of Detector --> The spacing between pixels (mm)
