@@ -101,7 +101,7 @@ class WavelengthCalibrator():
         self.F = 320 # Focal Length of Spectrograph (mm)
         self.Dv = 24 * (np.pi/180) # Deviation Angle (Radians)
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
-        self.width = 58 # Width of the Grating (mm)
+        self.width = 68 # Width of the Grating (mm)
 
         ### Initial Parameters According to ZWO Astro ASI2600 Pro Camera Documentation ###
         self.Pw = 0.00376 # Pitch of Detector --> The spacing between pixels (mm)
@@ -159,9 +159,10 @@ class WavelengthCalibrator():
     def Gaussian(self, x, A, P0, sigma, B):
         return A*np.exp(-(x-P0)**2/(2*sigma**2)) + B
 
-    def Extract_Peak_Centers(self, data, prominence = 2):
+    def Extract_Peak_Centers(self, data, prominence = 0.0001):
         # Collapse 2D CCD data to 1D spectra by taking median of each column
         spectrum = np.mean(data, axis = 0)
+        spectrum = spectrum/np.trapezoid(spectrum)
 
         # Smooth the Data
         spectrum = gaussian_filter1d(spectrum, sigma=1)
@@ -339,11 +340,11 @@ class WavelengthCalibrator():
 
         # The He_Ne Reference Line has a single line at 632.81646 nm.
         # The Czerny-Turner Spectrometer was centered at 633 nm and we will utilize the He_Ne line as a reference line to determine central pixel position
-        spectrum, peaks = self.Extract_Peak_Centers(He_Ne_Line, prominence = 10)
+        spectrum, peaks = self.Extract_Peak_Centers(He_Ne_Line)
         self.Pc = peaks[0]
 
         # Extract the Peak Centers from the measured Ne Spectrum
-        spectrum, P_measured = self.Extract_Peak_Centers(Ne_Data, prominence = 2)
+        spectrum, P_measured = self.Extract_Peak_Centers(Ne_Data)
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
         # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
@@ -409,7 +410,7 @@ class WavelengthCalibrator():
         data = np.flip(data, axis = 1)
 
         # Get the peaks for the current Ne Spectra
-        spectrum, P_measured = self.Extract_Peak_Centers(data, prominence = 2.0)
+        spectrum, P_measured = self.Extract_Peak_Centers(data)
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
         # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
