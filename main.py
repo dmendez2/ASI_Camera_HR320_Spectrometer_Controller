@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import zwoasi as asi
+import pyqtgraph as pg
 from pathlib import Path
 from collections import deque
 from lmfit import minimize, Parameters
@@ -15,10 +16,10 @@ from scipy.optimize import curve_fit, linear_sum_assignment
 from scipy.ndimage import gaussian_filter1d
 
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QObject, Signal, Slot, QTimer, QUrl, QThread
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, QUrl, QThread, Qt
 
 class mockCamera():
     def __init__(self):
@@ -107,7 +108,7 @@ class WavelengthCalibrator():
         self.Pw = 0.00376 # Pitch of Detector --> The spacing between pixels (mm)
         self.P_Min = 0 # Pixel Number Corresponding to Minimum Wavelength
         self.P_Max = 6247 # Pixel Number Corresponding to Maximum Wavelength
-        self.Pc = 3124 # Center Pixel Number
+        self.Pc = 3124 # Center Pixel Number (Actual measured central pixel is closer to 1590)
 
         ### Wavelength Parameters --> The Central Wavelength for Calibration is 633 nm and the Max-Min Wavelengths Will Be Computed Later ###
         self.lambda_c = 633 * 1e-6 # Central Wavelength of Spectrometer (mm)
@@ -127,7 +128,6 @@ class WavelengthCalibrator():
         self.Dv = 24 * (np.pi/180) # Deviation Angle (Radians)
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
         self.lambda_c = 633 * 1e-6 # Central Wavelength (nm)
-
 
     ### Function to Match Computed Lines to Nearest NIST Reference Line ###
     # We match the lines by doing a linear sum assignment which implements the Hungarian Algorithm
@@ -489,6 +489,27 @@ class WavelengthCalibrator():
         else:
             return False, np.max(residuals)*1e6
 
+class SpectrumPlot(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Live Spectrum")
+        self.resize(800, 400)
+
+        layout = QVBoxLayout(self)
+
+        self.plot = pg.PlotWidget()
+        self.plot.setLabel('bottom', 'Wavelength', units='nm')
+        self.plot.setLabel('left', 'Intensity')
+        self.plot.showGrid(x=True, y=True)
+        self.plot.setBackground('k')
+
+        self.curve = self.plot.plot(pen=pg.mkPen('c', width=2))
+
+        layout.addWidget(self.plot)
+
+    def update_spectrum(self, wavelength, intensity):
+        self.curve.setData(wavelength, intensity)
+
 class CameraImageProvider(QQuickImageProvider):
     def __init__(self):
         super().__init__(QQuickImageProvider.Image)
@@ -503,6 +524,7 @@ class CameraImageProvider(QQuickImageProvider):
 
 class CameraWorker(QObject):
     frameReady = Signal(QImage)  # for display
+    spectrumReady = Signal(object, object)  # wavelength, intensity
     standardCaptureFinished = Signal()
     captureBackgroundFinished = Signal()
     finished = Signal()
@@ -520,6 +542,8 @@ class CameraWorker(QObject):
         self.temp_c = None
         self.target_temp = None
 
+        self.latest_frame = None
+
         self.canCaptureSnapshot = False
         self.snapshot = None
 
@@ -533,6 +557,7 @@ class CameraWorker(QObject):
 
         self.save_raw_enabled = False
         self.save_wavelength_enabled = False
+
 
         self.standard_capture_path = None
         self.standard_capture_n_frames_start = 0
@@ -561,15 +586,22 @@ class CameraWorker(QObject):
         self.lambda_c = None
         self.max_residual = None
 
+        # Timer for updating display
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.display)
 
+        # Timer for flushing and processing the save queue
         self.save_timer = QTimer(self)
         self.save_timer.timeout.connect(self.flush_save_queue)
+
+        # Timer for emitting wavelength spectrum for display
+        self.spectrum_timer = QTimer(self)
+        self.spectrum_timer.timeout.connect(self.emit_spectrum)
 
     def start(self):
         self.timer.start(500)
         self.save_timer.start(2000)  # write at 20 Hz
+        self.spectrum_timer.start(200)  # 5 Hz
         #self.timer.start(int(exposure_ms * 1.1))
 
     def flush_save_queue(self):
@@ -590,7 +622,7 @@ class CameraWorker(QObject):
         # Add the raw data to the h5 file if saving raw data is enabled by user
         if self.save_raw_enabled:
             self.h5_dataset_raw.resize(self.h5_dataset_raw.shape[0] + n, axis=0)
-            self.h5_dataset_raw[-n:] = raw_data_frames
+            self.h5_dataset_raw[-n:] = np.array(raw_data_frames)
 
         # Add the wavelength data to the h5 file if saving wavelength data is enabled by user
         if self.save_wavelength_enabled:
@@ -609,14 +641,19 @@ class CameraWorker(QObject):
             self.h5_dataset_intens[-n:] = np.array(intensities)
 
     def display(self):
-        frame = self.acquire_frame()
+        # Acquire the frame from the buffer and then flip since lowest wavelengths are on the right but we want to see wavelengths from lowest to highest
+        frame = np.flip(self.acquire_frame(), axis = 1)
 
+        # Capture a frame for the snapshot and signal that we have captured it
         if self.canCaptureSnapshot:
             self.snapshot = frame.copy()
             self.canCaptureSnapshot = False
 
+        # Capture background
         if self.can_capture_background:
 
+            # If we have reached N frames, compute the average and signal that we are done with computing background
+            # Otherwise, continue adding background
             if self.background_n_frames_start == self.background_n_frames_end:
                 self.background = self.background / self.background_n_frames_end
                 self.background_n_frames_averaged = self.background_n_frames_end
@@ -634,20 +671,24 @@ class CameraWorker(QObject):
             frame = frame - self.background
             frame[frame < 0] = 0
 
+        # If standard capture running, add frames to the save queue, unless N frames is reached, in which case end standard capture
         if self.can_standard_capture:
             if self.standard_capture_n_frames_start == self.standard_capture_n_frames_end:
                 self.end_standard_capture()
             else:
-                self.save_queue.append(np.flip(frame.copy(), axis = 1))
+                self.save_queue.append(frame.copy())
                 self.standard_capture_n_frames_start += 1
 
         # Enqueue frame for live capture (NON-BLOCKING)
         if self.live_capture_running:
-            self.save_queue.append(np.flip(frame.copy(), axis = 1))
+            self.save_queue.append(frame.copy())
 
+        # Save the frame to cache and then convert the frame to a QT Image. Emit the image to be displayed.
+        self.latest_frame = frame.copy()
         qimg = self.convert_to_QImage(frame)
         self.frameReady.emit(qimg)
 
+    # Acquire the frame and convert from 16 bit buffer to human readable integer format
     def acquire_frame(self):
         raw_data = self.cam.get_video_data()
         frame = np.frombuffer(raw_data, dtype=np.uint16).reshape(self.max_height, self.max_width)
@@ -659,6 +700,15 @@ class CameraWorker(QObject):
         # Then convert to QImage for QML
         frame_8_bit = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
         return QImage(frame_8_bit.data, self.max_width, self.max_height, frame_8_bit.strides[0], QImage.Format_Grayscale8).copy()
+
+    # Check if spectrometer has been calibrated and if a frame has been acquired
+    # If so, compute the spectrum for the current frame and emit it to the spectrum display
+    def emit_spectrum(self):
+        if not self.isCalibrated or self.latest_frame is None:
+            return
+
+        wavelength, intensity = self.wavelength_calibrator.Get_Calibrated_Wavelength_Intensity_From_Pixel(self.latest_frame)
+        self.spectrumReady.emit(wavelength, intensity)
 
     @Slot(int, float, float, float)
     def set_wavelength_calibration_variables(self, Pc, Dv, gamma, lambda_c):
@@ -703,7 +753,6 @@ class CameraWorker(QObject):
             raise ValueError( f"Background shape mismatch: {self.background.shape}, "f"expected {(self.max_height, self.max_width)}")
 
         self.background_n_frames_averaged = 0
-        return
 
     @Slot(bool)
     def enable_subtraction(self, enabled):
@@ -954,6 +1003,7 @@ class CameraController(QObject):
     canSaveWavelengthRequested = Signal(bool)
     snapshotRequested = Signal()
     saveSnapshotRequested = Signal(str)
+    workerReady = Signal(QObject)
 
     def __init__(self):
         super().__init__()
@@ -1499,6 +1549,9 @@ class CameraController(QObject):
         self.camera_worker.finished.connect(self.camera_worker.deleteLater)
         self.camera_thread.finished.connect(self.camera_thread.deleteLater)
 
+        # Let the display know that the worker is ready so that the Plot Widget can be connected for Spectrum Plotting
+        self.workerReady.emit(self.camera_worker)
+
         # Officially start the thread
         self.camera_thread.start()
 
@@ -1513,9 +1566,17 @@ if __name__ == "__main__":
     engine.addImageProvider("camera", provider)
 
     cam = CameraController()
-    cam.start_camera_worker()
     cam.frameReady.connect(provider.updateImage)
     engine.rootContext().setContextProperty("cameraController", cam)
+
+    plot = SpectrumPlot()
+    plot.show()
+
+    def on_worker_ready(worker):
+        worker.spectrumReady.connect(plot.update_spectrum, Qt.QueuedConnection)
+
+    cam.workerReady.connect(on_worker_ready)
+    cam.start_camera_worker()
 
     engine.load("main.qml")
     if not engine.rootObjects():
