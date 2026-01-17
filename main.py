@@ -11,7 +11,7 @@ from lmfit import minimize, Parameters
 from datetime import datetime, timezone
 
 from scipy.signal import find_peaks
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, linear_sum_assignment
 from scipy.ndimage import gaussian_filter1d
 
 from PySide6.QtGui import QImage
@@ -128,6 +128,31 @@ class WavelengthCalibrator():
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
         self.lambda_c = 633 * 1e-6 # Central Wavelength (nm)
 
+
+    ### Function to Match Computed Lines to Nearest NIST Reference Line ###
+    # We match the lines by doing a linear sum assignment which implements the Hungarian Algorithm
+    # We first compute a distance matrix between each computed line and the NIST reference lines
+    # We then subtract the minimum distance of each row from that row
+    # We then look at the zeroes along each column. If there are N columns with a zero for N computed lines, then we have a globally optimal matching
+    # We then choose a zero in each column such that the zeroes chosen do not share a column with each other
+
+    ### Example ###
+    # Rows are computed lines, columns are reference lines
+
+    # Distance Matrix:
+    # 1     9      29      49
+    # 20    10     10      30
+    # 40    30     10      10
+
+    # Subtract minimum from each row
+    # 0     8    28    48
+    # 10    0    0     20
+    # 30    20   0     0
+
+    # We then choose columns such that the zeroes chosen do not share a column with each other
+    # We match row 1 to column 1
+    # We match row 2 to column 2 OR 3
+    # We match row 3 to column 3 OR 4 (Must be column 4 if row 2 was matched to column 3)
     def Process_Reference_Spectra(self, lambda_0, Wl_Min, Wl_Max, transition_rate_threshold, intensity_threshold, Wl_buffer = 2.0):
         # Filter the reference spectrum to only include the wavelengths between the theoretical minimum and maximum wavelengths (plus or minus a buffer) calculated by the calibrator algorithm with the initial parameters as provided by the spectrometer and camera parameters
         # Also, filter by the minimum transition rate threshold that can be determiend by the spectrometer (This is determined through trial and error so may not be completely accurate)
@@ -140,18 +165,14 @@ class WavelengthCalibrator():
         lambda_0 = np.sort(lambda_0)
         NIST_wavelengths = np.sort(NIST_wavelengths)
 
-        # The searchsorted function takes array A and B, it returns the indices of A which would maintain order of A if the elements of B were placed before these indices
-        # The clip function just ensures there are no values which are outside the index range of array A. Any values outside this range are clipped to the bottom index or upper index (Depending on which is closer)
-        i = np.searchsorted(NIST_wavelengths, lambda_0)
-        i = np.clip(i, 1, len(NIST_wavelengths) - 1)
+        # Create a distance matrix which keeps track of the absolute difference between the computed wavelengths (lambda_0) and the reference wavelenghts (NIST)
+        distances = np.abs(lambda_0[:, None] - NIST_wavelengths[None, :])
 
-        # Search sorted returns the indices where elements of array B would be sorted if placed in array A. The indices i satisfy the relation: A[i-1] < B <= A[i]
-        # Now we need to figure out which wavelength is closer, the left neighbor or the right neighbor
-        # We subtract the search_sorted left neighbors (i-1) from the approximate wavelengths --> Call this C
-        # Then we subtract the approximate wavelengths from the search_sorted right neighbors (i) --> Call this D
-        # We then do a boolean check to see if C is smaller than D --> If smaller, Boolean evaluates to 1 otherwise it evaluates to 0
-        # We then shift the indices i according to this boolean check. Shift left by 1 if C < D (Selects Left Neighbor) or remain at index i (Selects Right Neighbor)
-        matched_wavelengths = NIST_wavelengths[i - (lambda_0 - NIST_wavelengths[i-1] < NIST_wavelengths[i] - lambda_0)]
+        # Apply the linear sum assignment algorithm to the distance matrix
+        row_ind, col_ind = linear_sum_assignment(distances)
+
+        # Subset the chosen column indices from the linear sum assignment as the matched reference lines for each respective computed line
+        matched_wavelengths = NIST_wavelengths[col_ind]
 
         return matched_wavelengths
 
@@ -159,8 +180,12 @@ class WavelengthCalibrator():
     def Gaussian(self, x, A, P0, sigma, B):
         return A*np.exp(-(x-P0)**2/(2*sigma**2)) + B
 
+    # Function extracts peaks by searching for peaks which have a prominence greater than the minimum
+    # The default prominence is set to 0.0001, which means we define a peak as a signal which takes up 0.01% of the area or greater
+    # Once peaks are determined, we apply a Gaussian fit to get the most accurate peak center
     def Extract_Peak_Centers(self, data, prominence = 0.0001):
-        # Collapse 2D CCD data to 1D spectra by taking median of each column
+        # Collapse 2D CCD data to 1D spectra by taking mean of each column
+        # To ensure that we can detect peaks at any gain we normalize such that the integration over the whole spectrum equals 1
         spectrum = np.mean(data, axis = 0)
         spectrum = spectrum/np.trapezoid(spectrum)
 
@@ -369,10 +394,10 @@ class WavelengthCalibrator():
             params.add('n', value = self.n, vary = False)
             params.add('F', value = self.F, vary = False)
             params.add('Pw', value = self.Pw, vary = False)
-            params.add('lambda_c', value = self.lambda_c)
+            params.add('lambda_c', value = self.lambda_c, vary = False)
             params.add('Pc', value = self.Pc, vary = True, min = self.Pc - self.Pc*0.1, max = self.Pc + self.Pc*0.1)
             params.add('Dv', value = self.Dv, vary = True, min = self.Dv - self.Dv*0.2, max = self.Dv + self.Dv*0.2)
-            params.add('gamma', value = self.gamma, vary = False, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
+            params.add('gamma', value = self.gamma, vary = True, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
 
             # Compute the Fit by Miniimizing the Square of the Residual
             least_squares_fitter = minimize(self.residual, params, args=(P_measured, lambda_ref), method = "least_squares")
@@ -565,7 +590,7 @@ class CameraWorker(QObject):
         # Add the raw data to the h5 file if saving raw data is enabled by user
         if self.save_raw_enabled:
             self.h5_dataset_raw.resize(self.h5_dataset_raw.shape[0] + n, axis=0)
-            self.h5_dataset_raw[-n:] = np.array(raw_data_frames)
+            self.h5_dataset_raw[-n:] = raw_data_frames
 
         # Add the wavelength data to the h5 file if saving wavelength data is enabled by user
         if self.save_wavelength_enabled:
@@ -613,12 +638,12 @@ class CameraWorker(QObject):
             if self.standard_capture_n_frames_start == self.standard_capture_n_frames_end:
                 self.end_standard_capture()
             else:
-                self.save_queue.append(frame.copy())
+                self.save_queue.append(np.flip(frame.copy(), axis = 1))
                 self.standard_capture_n_frames_start += 1
 
         # Enqueue frame for live capture (NON-BLOCKING)
         if self.live_capture_running:
-            self.save_queue.append(frame.copy())
+            self.save_queue.append(np.flip(frame.copy(), axis = 1))
 
         qimg = self.convert_to_QImage(frame)
         self.frameReady.emit(qimg)
@@ -749,6 +774,7 @@ class CameraWorker(QObject):
                     self.h5file.attrs["wavelength_calibration_max_residual"] = self.max_residual
 
         ### Capture Type Attributes ###
+        self.h5file.attrs["frames_flipped"] = True
         self.h5file.attrs["acquisition_complete"] = False
 
         if self.live_capture_running:
