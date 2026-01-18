@@ -1078,35 +1078,6 @@ Window {
                     width: masterControlColumn.width * 0.9
 
                     Button {
-                        id: he_ne_calibration_button
-                        text: "Load He-Ne Laser Data"
-                        onClicked: he_ne_fileDialog.open()
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: he_ne_calibration_button.height
-                        radius: 4
-                        border.color: "#888"
-                        color: "#f5f5f5"
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            verticalAlignment: Text.AlignVCenter
-
-                            text: heNeFilePath
-                            elide: Text.ElideLeft     // Clip path nicely
-                            clip: true
-                        }
-                    }
-                }
-
-                RowLayout {
-                    spacing: 20
-                    width: masterControlColumn.width * 0.9
-
-                    Button {
                         id: ne_anchor_button
                         text: "Load 633 Centered Ne I Data"
                         onClicked: ne_anchor_fileDialog.open()
@@ -1467,19 +1438,6 @@ Window {
                 onAccepted: {
                     nistReferenceFilePath = nist_reference_fileDialog.file.toString()
                     cameraController.setNistReferencePath(nistReferenceFilePath)
-                }
-            }
-
-            FileDialog {
-                id: he_ne_fileDialog
-                title: "Select a file"
-                fileMode: FileDialog.OpenFile
-                folder: defaultPaths["calibration"]
-                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
-
-                onAccepted: {
-                    heNeFilePath = he_ne_fileDialog.file.toString()
-                    cameraController.setHeNePath(heNeFilePath)
                 }
             }
 

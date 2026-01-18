@@ -112,7 +112,7 @@ class WavelengthCalibrator():
         self.Pw = 0.00376 # Pitch of Detector --> The spacing between pixels (mm)
         self.P_Min = 0 # Pixel Number Corresponding to Minimum Wavelength
         self.P_Max = 6247 # Pixel Number Corresponding to Maximum Wavelength
-        self.Pc = 3124 # Center Pixel Number (Actual measured central pixel is closer to 1590)
+        self.Pc = 1593 # Center Pixel Number (Actual value according to documentation is 3124 but according to measurements done with a He-Ne Laser with single line at 632.8 nm, the true center is at about 1590)
 
         ### Wavelength Parameters --> The Central Wavelength for Calibration is 633 nm and the Max-Min Wavelengths Will Be Computed Later ###
         self.lambda_c = 633 * 1e-6 # Central Wavelength of Spectrometer (mm)
@@ -128,7 +128,7 @@ class WavelengthCalibrator():
 
     # Reset all variables to default manufacturer variables
     def Reset(self):
-        self.Pc = 3124 # Central Pixel
+        self.Pc = 1593 # Central Pixel
         self.Dv = 24 * (np.pi/180) # Deviation Angle (Radians)
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
         self.lambda_c = 633 * 1e-6 # Central Wavelength (nm)
@@ -353,15 +353,15 @@ class WavelengthCalibrator():
         P_model = self.P_Lambda(k, n, Pw, Pc, F, Dv, gamma, lambda_c, lambda_ref)
         return (P_measured - P_model)
 
-    # To Calibrate, we First Utilize a Reference He-Ne Laser with a Single Known Wavelength of 632.81646 nm
-    # A Peak Finding Algorithm is Used to Find the Pixel Position of the He-Ne Line and Later the Lines for the Ne Spectrum
-    # The Spectrometer was Dialed to a Center Wavelength of 633 nm so the He_Ne Line is Roughly at the Center Pixel Position
-    # With the Center Pixel Position Determined, we then Estimate the Wavelengths of the Ne I Spectra Lines (Also centered to 633 nm when they were measured)
+    # To Calibrate, we First Utilized a Reference He-Ne Laser with a Single Known Wavelength of 632.81646 nm
+    # A Peak Finding Algorithm was Used to Find the Pixel Position of the He-Ne Line and Later, here, the Lines for the Ne Spectrum
+    # The Spectrometer was Dialed to a Center Wavelength of 633 nm so the He_Ne Line is Roughly at the Center Pixel Position --> ~Pixel 1593
+    # With the Center Pixel Position Determined, we can then Estimate the Wavelengths of the Ne I Spectra Lines (Also centered to 633 nm when they were measured)
     # The Estimated Wavelengths are then Matched to the Closest Wavelengths in the NIST Reference Spectrum
     # The Center Pixel Position, the Deviation Angle, and the Tilt Angle are then Varied and Utilized to Compute Pixel Positions Using the Matched Reference Wavelengths
     # Residuals Between the Computed Pixel Position and the True Measured Pixel Positions are then Determined
     # A Least Squares Fit is Conducted to Minimize the Residuals and Find the Best Fit Parameter Combination Which Become the Calibrated Values
-    def Calibrate(self, Ne_Data_Path, He_Ne_Line_Path, Nist_Reference_Path):
+    def Calibrate(self, Ne_Data_Path, Nist_Reference_Path):
         # Preprocess the NIST Reference Spectra
         self.reference_spectra = pd.read_csv(Nist_Reference_Path)[['obs_wl_air(nm)', 'intens', 'Aki(s^-1)']].astype(float).dropna() # Reference Ne I spectral line wavelength --> From NIST (nm)
         self.reference_spectra['obs_wl_air(nm)'] *= 1e-6 # Convert wavelengths to millimeters for later calculations (mm)
@@ -376,20 +376,8 @@ class WavelengthCalibrator():
             Ne_Data = tifffile.imread(Ne_Data_Path)
         Ne_Data = np.flip(Ne_Data, axis = 1)
 
-        He_Ne_Line = None
-        if He_Ne_Line_Path.endswith(".npy"):
-            He_Ne_Line = np.load(He_Ne_Line_Path)
-        elif He_Ne_Line_Path.endswith(".tiff") or He_Ne_Line_Path.endswith(".tif"):
-            He_Ne_Line = tifffile.imread(He_Ne_Line_Path)
-        He_Ne_Line = np.flip(He_Ne_Line, axis = 1)
-
         # Get Pixel Dimensions
         l,w = Ne_Data.shape
-
-        # The He_Ne Reference Line has a single line at 632.81646 nm.
-        # The Czerny-Turner Spectrometer was centered at 633 nm and we will utilize the He_Ne line as a reference line to determine central pixel position
-        spectrum, peaks = self.Extract_Peak_Centers(He_Ne_Line)
-        self.Pc = peaks[0]
 
         # Extract the Peak Centers from the measured Ne Spectrum
         spectrum, P_measured = self.Extract_Peak_Centers(Ne_Data)
@@ -1196,7 +1184,6 @@ class CameraController(QObject):
         self.isCalibrationReadyToUse = False
 
         self.Nist_Reference_Path = None
-        self.He_Ne_Path = None
         self.Ne_633_Anchor_Path = None
         self.Ne_Calibration_Path = None
 
@@ -1278,7 +1265,7 @@ class CameraController(QObject):
             self.errorOccurred.emit("Error setting anti-dew heater: ", e)
 
     def isCalibrationReady(self):
-        return (self.Nist_Reference_Path is not None) and (self.He_Ne_Path is not None) and (self.Ne_633_Anchor_Path is not None) and (self.Ne_Calibration_Path is not None)
+        return (self.Nist_Reference_Path is not None) and (self.Ne_633_Anchor_Path is not None) and (self.Ne_Calibration_Path is not None)
 
     @Slot(str)
     def setNistReferencePath(self, qt_file_path):
@@ -1297,27 +1284,6 @@ class CameraController(QObject):
         # Assign the path to the Helium Neon Line Data to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
         self.Nist_Reference_Path = file_path
-        if(self.isCalibrationReady()):
-            self.canCalibrate.emit(True)
-
-    @Slot(str)
-    def setHeNePath(self, qt_file_path):
-        url = QUrl(qt_file_path)
-        file_path = ""
-        if url.isValid():
-            file_path = url.toLocalFile()
-        else:
-            self.errorOccurred.emit("Error, File Path Not Valid")
-            return
-
-        # Ensure correct extension
-        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
-            self.errorOccurred.emit("Unsupported file path")
-            return
-
-        # Assign the path to the Helium Neon Line Data to the input file path.
-        # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
-        self.He_Ne_Path = file_path
         if(self.isCalibrationReady()):
             self.canCalibrate.emit(True)
 
@@ -1373,7 +1339,7 @@ class CameraController(QObject):
             self.errorOccurred.emit("Cannot calibrate while acquiring data")
         else:
             self.wavelength_calibrator.Reset()
-            self.wavelength_calibrator.Calibrate(self.Ne_633_Anchor_Path, self.He_Ne_Path, self.Nist_Reference_Path)
+            self.wavelength_calibrator.Calibrate(self.Ne_633_Anchor_Path, self.Nist_Reference_Path)
             self.calibrationStatus, self.max_residual = self.wavelength_calibrator.Central_Wavelength_Shift(self.Ne_Calibration_Path, self.approximate_central_wavelength)
             self.min_wavelength, self.max_wavelength = self.wavelength_calibrator.Get_Wavelength_Range()
 
