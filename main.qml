@@ -1269,6 +1269,44 @@ Window {
                     spacing: wavelengthCalibrationColumn.width*0.02
 
                     Text{
+                        text: "Mean Residual:"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    Rectangle{
+                        id: meanResidualBox
+                        color: "#222021"
+                        Layout.preferredWidth: wavelengthCalibrationColumn.width * 0.45
+                        height: 30
+
+                        Text {
+                            id: meanResidualLabel
+                            anchors.horizontalCenter: meanResidualBox.horizontalCenter
+                            anchors.verticalCenter: meanResidualBox.verticalCenter
+                            text: "--- nm"
+                            font.pixelSize: 18
+                            font.bold: true
+                            color: "#cdcdcd"
+
+                            Connections {
+                                target: cameraController
+                                function onMeanResidualCalculated(residual) {
+                                    meanResidualLabel.text = residual.toFixed(4) + " nm"
+                                }
+                                function onNotApplicableResidual(){
+                                    meanResidualLabel.text = "N/A"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                RowLayout{
+                    spacing: wavelengthCalibrationColumn.width*0.02
+
+                    Text{
                         text: "Max Residual:"
                         font.bold: true
                         color: "#cdcdcd"
@@ -1292,7 +1330,7 @@ Window {
 
                             Connections {
                                 target: cameraController
-                                function onResidualCalculated(residual) {
+                                function onMaxResidualCalculated(residual) {
                                     maxResidualLabel.text = residual.toFixed(4) + " nm"
                                 }
                                 function onNotApplicableResidual(){
@@ -1301,7 +1339,45 @@ Window {
                             }
                         }
                     }
-            }
+                }
+
+                RowLayout{
+                    spacing: wavelengthCalibrationColumn.width*0.02
+
+                    Text{
+                        text: "Lines Calibrated:"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    Rectangle{
+                        id: numCalibrationLinesBox
+                        color: "#222021"
+                        Layout.preferredWidth: wavelengthCalibrationColumn.width * 0.45
+                        height: 30
+
+                        Text {
+                            id: numCalibrationLinesLabel
+                            anchors.horizontalCenter: numCalibrationLinesBox.horizontalCenter
+                            anchors.verticalCenter: numCalibrationLinesBox.verticalCenter
+                            text: "--- Lines"
+                            font.pixelSize: 18
+                            font.bold: true
+                            color: "#cdcdcd"
+
+                            Connections {
+                                target: cameraController
+                                function onNumLinesCalibrated(num) {
+                                    numCalibrationLinesLabel.text = num + " Lines"
+                                }
+                                function onNotApplicableResidual(){
+                                    numCalibrationLinesLabel.text = "N/A"
+                                }
+                            }
+                        }
+                    }
+                }
 
                 RowLayout{
                     spacing: wavelengthCalibrationColumn.width*0.05

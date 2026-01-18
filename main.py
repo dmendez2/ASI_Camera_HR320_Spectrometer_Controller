@@ -498,11 +498,11 @@ class WavelengthCalibrator():
             # Update the iteration count
             iter += 1
 
-        # Check if calibration was complete or not by checking if the residuals are smaller than the resolution of the diffraction grating
-        if(np.all(residuals < d_lambda)):
-            return True, np.max(residuals)*1e6
+        # Check if calibration was complete or not by checking if the mean of the residuals are smaller than the resolution of the diffraction grating
+        if(np.mean(residuals) < d_lambda):
+            return True, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
         else:
-            return False, np.max(residuals)*1e6
+            return False, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
 
 class SpectrumPlot(QWidget):
     def __init__(self):
@@ -632,6 +632,8 @@ class CameraWorker(QObject):
         self.gamma = None
         self.lambda_c = None
         self.max_residual = None
+        self.mean_residual = None
+        self.num_lines_calibrated = None
 
         # Timer for updating display
         self.timer = QTimer(self)
@@ -795,6 +797,8 @@ class CameraWorker(QObject):
     @Slot(int, float, float, float)
     def set_wavelength_calibration_variables(self, Pc, Dv, gamma, lambda_c):
         self.max_residual = None
+        self.mean_residual = None
+        self.num_lines_calibrated = None
         self.isCalibrated = True
 
         self.Pc = Pc
@@ -937,11 +941,13 @@ class CameraWorker(QObject):
                 self.h5file.attrs["deviation_angle (degrees)"] = self.Dv * 180/np.pi
                 self.h5file.attrs["tilt_angle (degrees)"] = self.gamma * 180/np.pi
 
-                if self.max_residual is None:
+                if (self.max_residual is None) and (self.mean_residual is None) and (self.num_lines_calibrated) is None:
                     self.h5file.attrs["wavelength_calibration_source"] = "loaded"
                 else:
                     self.h5file.attrs["wavelength_calibration_source"] = "computed"
-                    self.h5file.attrs["wavelength_calibration_max_residual"] = self.max_residual
+                    self.h5file.attrs["wavelength_calibration_mean_residual (nm)"] = self.mean_residual
+                    self.h5file.attrs["wavelength_calibration_max_residual (nm)"] = self.max_residual
+                    self.h5file.attrs["num_lines_calibrated"] = self.num_lines_calibrated
 
         ### Capture Type Attributes ###
         self.h5file.attrs["frames_flipped"] = True
@@ -1064,8 +1070,10 @@ class CameraWorker(QObject):
         self.temp_c = temp_c
 
     @Slot(float)
-    def get_max_residual(self, max_residual):
+    def get_residual_info(self, mean_residual, max_residual, num_lines_calibrated):
+        self.mean_residual = mean_residual
         self.max_residual = max_residual
+        self.num_lines_calibrated = num_lines_calibrated
 
     @Slot(bool)
     def get_cooler_status(self, cooler_status):
@@ -1083,7 +1091,9 @@ class CameraController(QObject):
     exposureRangeChanged = Signal(int, int)
     tempRangeChanged = Signal(int, int)
     temperatureChanged = Signal(float)
-    residualCalculated = Signal(float)
+    maxResidualCalculated = Signal(float)
+    meanResidualCalculated = Signal(float)
+    numLinesCalibrated = Signal(int)
     canSaveBackgroundChanged = Signal(bool)
     canSubtractBackgroundChanged = Signal(bool)
     canResetBackgroundChanged = Signal(bool)
@@ -1111,7 +1121,7 @@ class CameraController(QObject):
     exposureRequested = Signal(int)
     targetTempRequested = Signal(int)
     currentTempRequested = Signal(float)
-    maxResidualRequested = Signal(float)
+    residualInfoRequested = Signal(float, float, int)
     coolerStatusRequested = Signal(bool)
     antiDewHeaterStatusRequested = Signal(bool)
     captureBackgroundRequested = Signal(int)
@@ -1190,7 +1200,9 @@ class CameraController(QObject):
         self.min_wavelength = 400
         self.approximate_central_wavelength = 700
         self.max_wavelength = 1000
+        self.mean_residual = None
         self.max_residual = None
+        self.num_lines_calibrated = None
 
         # Spectrum Plotting Window
         self.spectrum_plot = SpectrumPlot()
@@ -1340,7 +1352,7 @@ class CameraController(QObject):
         else:
             self.wavelength_calibrator.Reset()
             self.wavelength_calibrator.Calibrate(self.Ne_633_Anchor_Path, self.Nist_Reference_Path)
-            self.calibrationStatus, self.max_residual = self.wavelength_calibrator.Central_Wavelength_Shift(self.Ne_Calibration_Path, self.approximate_central_wavelength)
+            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Central_Wavelength_Shift(self.Ne_Calibration_Path, self.approximate_central_wavelength)
             self.min_wavelength, self.max_wavelength = self.wavelength_calibrator.Get_Wavelength_Range()
 
             if self.calibrationStatus:
@@ -1350,14 +1362,16 @@ class CameraController(QObject):
 
             self.centralWavelengthChanged.emit(self.wavelength_calibrator.Get_Central_Wavelength())
             self.wavelengthRangeChanged.emit(self.min_wavelength, self.max_wavelength)
-            self.residualCalculated.emit(self.max_residual)
+            self.meanResidualCalculated.emit(self.mean_residual)
+            self.maxResidualCalculated.emit(self.max_residual)
+            self.numLinesCalibrated.emit(self.num_lines_calibrated)
 
             self.isCalibrationReadyToUse = True
             self.calibration_save_enabled = True
 
             free_parameters = self.wavelength_calibrator.Get_Free_Parameters()
             self.calibrationVariablesRequested.emit(free_parameters['Pc'], free_parameters['Dv'], free_parameters['gamma'], free_parameters['lambda_c'])
-            self.maxResidualRequested.emit(self.max_residual)
+            self.residualInfoRequested.emit(self.mean_residual, self.max_residual, self.num_lines_calibrated)
             self.canSaveCalibrationChanged.emit(True)
             self.canShowWavelengthPlotChanged.emit(True)
 
@@ -1385,6 +1399,7 @@ class CameraController(QObject):
             lambda_c = 0
             if file_path.endswith(".csv"):
                 df = pd.read_csv(file_path)
+
                 Pc = df['Pc'][0]
                 Dv = df['Dv'][0]
                 gamma = df['gamma'][0]
@@ -1649,7 +1664,7 @@ class CameraController(QObject):
         self.exposureRequested.connect(self.camera_worker.get_exposure)
         self.targetTempRequested.connect(self.camera_worker.get_target_temp)
         self.currentTempRequested.connect(self.camera_worker.get_current_temp)
-        self.maxResidualRequested.connect(self.camera_worker.get_max_residual)
+        self.residualInfoRequested.connect(self.camera_worker.get_residual_info)
         self.coolerStatusRequested.connect(self.camera_worker.get_cooler_status)
         self.antiDewHeaterStatusRequested.connect(self.camera_worker.get_antiDewHeater_status)
         self.captureBackgroundRequested.connect(self.camera_worker.capture_background)
