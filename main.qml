@@ -29,29 +29,53 @@ Window {
         anchors.fill: parent
         spacing: 10
 
-         // Left side: image in a scrollable area
-        ScrollView {
-            id: imageScroll_left
-            width: parent.width * 0.70   // take ~70% of window width
-            height: parent.height       // full height
+    // Left side: image in a scrollable area
+    Flickable {
+        id: imageFlick
+        width: parent.width * 0.70
+        height: parent.height
 
-            clip: true  // ensure only visible portion is shown
+        contentWidth: liveFeed.width
+        contentHeight: liveFeed.height
 
-            Image {
-                id: liveFeed
-                fillMode: Image.PreserveAspectFit
-                source: "image://camera/live"
-                 // don’t force-fit to parent: let it keep its size
-                // this way scrollbars appear if it’s larger
+        interactive: true
+        clip: true
+
+        boundsBehavior: Flickable.StopAtBounds
+        flickDeceleration: 3000
+
+        ScrollBar.horizontal: ScrollBar { }
+        ScrollBar.vertical: ScrollBar { }
+
+        Image {
+            id: liveFeed
+            source: "image://camera/live"
+            width: implicitWidth
+            height: implicitHeight
+            fillMode: Image.Pad   // VERY important
+            smooth: false
+            asynchronous: false
+            cache: false
+        }
+
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            onDoubleTapped: cameraController.find_brightest_centroid_requested()
+        }
+
+        Connections {
+            target: cameraController
+            function onFrameReady(frame) {
+                liveFeed.source = "image://camera/live?" + Date.now()
             }
 
-            Connections {
-                target: cameraController
-                function onFrameReady(frame) {
-                    liveFeed.source = "image://camera/live?" + Date.now()
-                }
+            function onBrightestCentroidFound(x, y) {
+                imageFlick.contentX = Math.max(0, x - imageFlick.width / 2)
+                imageFlick.contentY = Math.max(0, y - imageFlick.height / 2)
             }
-            }
+        }
+    }
+
     ScrollView {
         id: imageScroll_right
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -1082,7 +1106,6 @@ Window {
                     spacing: 20
                     width: masterControlColumn.width * 0.9
 
-
                     Button {
                         id: ne_anchor_button
                         text: "Load 633 Centered Ne I Data"
@@ -1367,6 +1390,7 @@ Window {
                 id: saveFramesForStandardCaptureFileDialog
                 title: "Save Data To"
                 fileMode: FileDialog.SaveFile
+                folder: defaultPaths["data"]
                 nameFilters: ["HDF5 File (*.hdf5)"]
 
                 onAccepted: {
@@ -1380,6 +1404,7 @@ Window {
                 id: saveFramesForLiveCaptureFileDialog
                 title: "Save Data To"
                 fileMode: FileDialog.SaveFile
+                folder: defaultPaths["data"]
                 nameFilters: ["HDF5 File (*.hdf5)"]
 
                 onAccepted: {
@@ -1392,8 +1417,8 @@ Window {
             FileDialog {
                 id: saveDialog
                 title: "Save as"
-                folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                 fileMode: FileDialog.SaveFile
+                folder: defaultPaths["background"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)", "PNG (*.png)"]
 
                 onAccepted: {
@@ -1405,8 +1430,8 @@ Window {
             FileDialog {
                 id: openBackgroundDialog
                 title: "Select a file"
-                folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                 fileMode: FileDialog.OpenFile
+                folder: defaultPaths["background"]
                 nameFilters: ["Numpy Matrix (*.npy)", "HDF5 File (*.hdf5)", "H5 File (*.h5)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
@@ -1423,6 +1448,7 @@ Window {
                 id: snapshotFileDialog
                 title: "Save Frame To"
                 fileMode: FileDialog.SaveFile
+                folder: defaultPaths["snapshots"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)", "PNG (*.png)"]
 
                 onAccepted: {
@@ -1435,6 +1461,7 @@ Window {
                 id: nist_reference_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
+                folder: defaultPaths["calibration"]
                 nameFilters: ["CSV (*.csv)"]
 
                 onAccepted: {
@@ -1447,6 +1474,7 @@ Window {
                 id: he_ne_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
+                folder: defaultPaths["calibration"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
@@ -1459,8 +1487,8 @@ Window {
                 id: ne_anchor_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
+                folder: defaultPaths["calibration"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
-                //folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
 
                 onAccepted: {
                     neAnchorFilePath = ne_anchor_fileDialog.file.toString()
@@ -1472,6 +1500,7 @@ Window {
                 id: ne_spectrum_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
+                folder: defaultPaths["calibration"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
@@ -1483,8 +1512,8 @@ Window {
               FileDialog {
                   id: saveCalibrationDialog
                   title: "Save as"
-                  folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                   fileMode: FileDialog.SaveFile
+                  folder: defaultPaths["calibration"]
                   nameFilters: ["CSV File (*.csv)"]
 
                   onAccepted: {
@@ -1496,8 +1525,8 @@ Window {
               FileDialog {
                   id: loadCalibrationDialog
                   title: "Select a file"
-                  folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
                   fileMode: FileDialog.OpenFile
+                  folder: defaultPaths["calibration"]
                   nameFilters: ["CSV File (*.csv)", "HDF5 File (*.hdf5)", "H5 File (*.h5)"]
 
                   onAccepted: {

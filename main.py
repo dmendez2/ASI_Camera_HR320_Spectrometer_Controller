@@ -20,7 +20,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
-from PySide6.QtCore import QObject, Signal, Slot, QTimer, QUrl, QThread, Qt
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, QUrl, QThread
 
 class mockCamera():
     def __init__(self):
@@ -89,7 +89,10 @@ class mockCamera():
         return
 
     def get_video_data(self):
-        return np.random.randint(0, 256, self.height * self.width).astype(np.uint16)
+        data = np.random.randint(0, 65535, self.height * self.width).astype(np.uint16)
+        idx = self.height//2 * self.width + self.width//2
+        data[idx] = 65535  # brightest pixel
+        return data
 
 ### All Internal Variables Length Scale Held at Millimeters (mm) For Ease of Calculations ###
 ### Outputted Variables Converted to Nanometers (nm) ###
@@ -185,6 +188,9 @@ class WavelengthCalibrator():
     # The default prominence is set to 0.0001, which means we define a peak as a signal which takes up 0.01% of the area or greater
     # Once peaks are determined, we apply a Gaussian fit to get the most accurate peak center
     def Extract_Peak_Centers(self, data, prominence = 0.0001):
+        # Convert to 32-bit to prevent overflow errors
+        data = data.astype(np.float32, copy = False)
+
         # Collapse 2D CCD data to 1D spectra by taking mean of each column
         # To ensure that we can detect peaks at any gain we normalize such that the integration over the whole spectrum equals 1
         spectrum = np.mean(data, axis = 0)
@@ -224,6 +230,10 @@ class WavelengthCalibrator():
     # To get an intensity array, we take the mean along the X-Axis (Recall that wavelengths only change along Y-Axis)
     # Then we divide by the trapezoidal integration of the intensity array to normalize the integration to be 1
     def Process_Pixel_Intensity(self, data):
+        # Convert to 32-bit to prevent overflow errors
+        data = data.astype(np.float32, copy = False)
+
+        # Convert the intensity column wise
         intensity = np.mean(data, axis = 0)
         intensity = intensity/np.trapezoid(intensity)
         return intensity
@@ -238,6 +248,10 @@ class WavelengthCalibrator():
 
         # Return the wavelengths (nm) and the intensity
         wavelength = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, pixels) * 1e6
+
+        # Convert to 32 bit arrays to save memory (Any additional precision is unphysical anyway)
+        wavelength = wavelength.astype(np.float32)
+        intensity = intensity.astype(np.float32)
 
         return  wavelength, intensity
 
@@ -525,6 +539,34 @@ class SpectrumPlot(QWidget):
         event.ignore()
         self.hide()
 
+class PathManager:
+    def __init__(self):
+        self.base_dir = self._get_base_dir()
+
+        self.calibration_dir = self.base_dir / "calibration"
+        self.background_dir  = self.base_dir / "background"
+        self.snapshots_dir   = self.base_dir / "snapshots"
+        self.data_dir        = self.base_dir / "data"
+
+        self._ensure_directories()
+
+    def _get_base_dir(self) -> Path:
+        # Works in dev and frozen apps
+        if getattr(sys, 'frozen', False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent
+
+    def _ensure_directories(self):
+        for path in [self.calibration_dir,self.background_dir,self.snapshots_dir,self.data_dir]:
+            path.mkdir(parents=True, exist_ok=True)
+
+    def as_qml_urls(self) -> dict:
+        return {
+                    "calibration": QUrl.fromLocalFile(str(self.calibration_dir)),
+                    "background":  QUrl.fromLocalFile(str(self.background_dir)),
+                    "snapshots":   QUrl.fromLocalFile(str(self.snapshots_dir)),
+                    "data":        QUrl.fromLocalFile(str(self.data_dir)),
+                }
 
 class CameraImageProvider(QQuickImageProvider):
     def __init__(self):
@@ -541,6 +583,7 @@ class CameraImageProvider(QQuickImageProvider):
 class CameraWorker(QObject):
     frameReady = Signal(QImage)  # for display
     spectrumReady = Signal(object, object)  # wavelength, intensity
+    brightestCentroidFound = Signal(int, int)
     standardCaptureFinished = Signal()
     captureBackgroundFinished = Signal()
     finished = Signal()
@@ -660,11 +703,6 @@ class CameraWorker(QObject):
         # Acquire the frame from the buffer and then flip since lowest wavelengths are on the right but we want to see wavelengths from lowest to highest
         frame = np.flip(self.acquire_frame(), axis = 1)
 
-        # Capture a frame for the snapshot and signal that we have captured it
-        if self.canCaptureSnapshot:
-            self.snapshot = frame.copy()
-            self.canCaptureSnapshot = False
-
         # Capture background
         if self.can_capture_background:
 
@@ -674,18 +712,34 @@ class CameraWorker(QObject):
                 self.background = self.background / self.background_n_frames_end
                 self.background_n_frames_averaged = self.background_n_frames_end
 
+                # Clip to valid uint16 range and convert back to uint16 for storage
+                self.background = np.clip(self.background, 0, 65535).astype(np.uint16)
+
+                # Reset all variables pertaining to background capture
                 self.can_capture_background = False
                 self.background_n_frames_start = 0
                 self.background_n_frames_end = 0
 
                 self.captureBackgroundFinished.emit()
             else:
-                self.background = frame if self.background is None else self.background + frame
+                if self.background is None:
+                    self.background = frame.astype(np.float32)
+                else:
+                    self.background += frame.astype(np.float32)
                 self.background_n_frames_start += 1
 
         if self.background is not None and self.subtraction_enabled and self.background_n_frames_end == 0:
-            frame = frame - self.background
-            frame[frame < 0] = 0
+            # Perform Background Subtraction by converting to 32 bit arrays
+            frame = frame.astype(np.float32) - self.background.astype(np.float32)
+
+            # Ensure no negative values, and that all values fall within a 16 bit range. Then convert to a 16 bit array again
+            frame = np.maximum(frame, 0)
+            frame = np.clip(frame, 0, 65535).astype(np.uint16)
+
+        # Capture a frame for the snapshot and signal that we have captured it
+        if self.canCaptureSnapshot:
+            self.snapshot = frame.copy()
+            self.canCaptureSnapshot = False
 
         # If standard capture running, add frames to the save queue, unless N frames is reached, in which case end standard capture
         if self.can_standard_capture:
@@ -725,6 +779,30 @@ class CameraWorker(QObject):
 
         wavelength, intensity = self.wavelength_calibrator.Get_Calibrated_Wavelength_Intensity_From_Pixel(self.latest_frame)
         self.spectrumReady.emit(wavelength, intensity)
+
+    @Slot()
+    def find_brightest_centroid(self):
+        if self.latest_frame is None:
+            return
+
+        # Computing centroids consists of a lot of summing so we convert to float64 to ensure no overflow
+        # Also, a centroid is an average so we need to switch from integers to floats to make sure float division is safe
+        frame = self.latest_frame.astype(np.float64, copy=False)
+
+        # Create coordinate grids
+        Y, X = np.indices(frame.shape)
+
+        total_intensity = frame.sum()
+        if total_intensity == 0:
+            # fallback if frame is empty
+            return frame.shape[1] / 2, frame.shape[0] / 2
+
+        # Compute weighted averages to get the x and y centroid positions
+        x_c = (frame * X).sum() / total_intensity
+        y_c = (frame * Y).sum() / total_intensity
+
+        # Send the most intense pixel centroid position to the QML Display
+        self.brightestCentroidFound.emit(x_c, y_c)
 
     @Slot(int, float, float, float)
     def set_wavelength_calibration_variables(self, Pc, Dv, gamma, lambda_c):
@@ -813,8 +891,28 @@ class CameraWorker(QObject):
         return new_path
 
     def open_h5_file(self, path):
+        # Get the experiment start time
+        experiment_start_utc = datetime.now(timezone.utc)
+        experiment_start_local = datetime.now().astimezone()
+
+        # Convert date-time object to a formatted timestamp string
+        timestamp = experiment_start_local.strftime("%Y_%m_%d_time_%H_%M_%S")
+
+        # Convert path to Path object
+        path = Path(path)
+
+        # Extract file stem (name without extension) and suffix (extension)
+        stem = path.stem        # original file name without extension
+        suffix = path.suffix    # file extension, e.g., ".h5"
+
+        # Create the new file name from the file stem, timestamp, and file suffix
+        new_file_name = f"name_{stem}_date_{timestamp}{suffix}"
+
+        # Prepend timestamp to file name
+        formatted_path = path.parent / new_file_name
+
         # Open hdf5 file
-        self.h5file = h5py.File(path, "w")
+        self.h5file = h5py.File(formatted_path, "w")
 
         # Set attributes relavent to current experiment
         ### Camera Attributes ###
@@ -867,8 +965,8 @@ class CameraWorker(QObject):
             self.h5file.attrs["capture_type"] = "standard"
 
         ### Date-Time Attributes ###
-        self.h5file.attrs["experiment_start_coordinated_universal_time"] = datetime.now(timezone.utc).isoformat()
-        self.h5file.attrs["experiment_start_local_time"] = datetime.now().astimezone().isoformat()
+        self.h5file.attrs["experiment_start_coordinated_universal_time"] = experiment_start_utc.isoformat()
+        self.h5file.attrs["experiment_start_local_time"] = experiment_start_local.isoformat()
         self.h5file.attrs["local_timezone"] = datetime.now().astimezone().tzname()
 
         # Create HDF5 file datasets
@@ -876,8 +974,8 @@ class CameraWorker(QObject):
         if self.save_raw_enabled:
             self.h5_dataset_raw = self.h5file.create_dataset(self.raw_data_str, shape=(0, self.max_height, self.max_width), maxshape=(None, self.max_height, self.max_width), dtype=np.uint16, chunks=(1, self.max_height, self.max_width))
         if self.save_wavelength_enabled:
-            self.h5_dataset_wl = self.h5file.create_dataset(self.wavelength_data_str, shape=(0, self.max_width), maxshape=(None, self.max_width), dtype=np.float64, chunks=(1, self.max_width))
-            self.h5_dataset_intens = self.h5file.create_dataset(self.intensity_data_str, shape=(0, self.max_width), maxshape=(None, self.max_width), dtype=np.float64, chunks=(1, self.max_width))
+            self.h5_dataset_wl = self.h5file.create_dataset(self.wavelength_data_str, shape=(0, self.max_width), maxshape=(None, self.max_width), dtype=np.float32, chunks=(1, self.max_width))
+            self.h5_dataset_intens = self.h5file.create_dataset(self.intensity_data_str, shape=(0, self.max_width), maxshape=(None, self.max_width), dtype=np.float32, chunks=(1, self.max_width))
         if self.subtraction_enabled and self.background is not None:
             self.h5_dataset_background = self.h5file.create_dataset("background", data=self.background, dtype=self.background.dtype, shape = (self.max_height, self.max_width))
         return
@@ -992,6 +1090,7 @@ class CameraWorker(QObject):
 class CameraController(QObject):
     # User Interface Signals
     frameReady = Signal(QImage)
+    brightestCentroidFound = Signal(int, int)
     gainRangeChanged = Signal(int, int)
     exposureRangeChanged = Signal(int, int)
     tempRangeChanged = Signal(int, int)
@@ -1019,6 +1118,7 @@ class CameraController(QObject):
 
     # Worker Signals
     calibrationVariablesRequested = Signal(int, float, float, float)
+    brightestCentroidRequested = Signal()
     gainRequested = Signal(int)
     exposureRequested = Signal(int)
     targetTempRequested = Signal(int)
@@ -1123,6 +1223,10 @@ class CameraController(QObject):
         self.exposureRangeChanged.emit(self.exposure_min, self.exposure_max)
         self.gainRangeChanged.emit(self.gain_min, self.gain_max)
         self.tempRangeChanged.emit(self.temp_min, self.temp_max)
+
+    @Slot()
+    def find_brightest_centroid_requested(self):
+        self.brightestCentroidRequested.emit()
 
     @Slot(int)
     def setNBackgroundFrames(self, n):
@@ -1596,10 +1700,12 @@ class CameraController(QObject):
         self.standardCaptureRequested.connect(self.camera_worker.start_standard_capture)
         self.snapshotRequested.connect(self.camera_worker.capture_snapshot)
         self.saveSnapshotRequested.connect(self.camera_worker.save_snapshot)
+        self.brightestCentroidRequested.connect(self.camera_worker.find_brightest_centroid)
 
         # Connect all functions that the Camera Worker needs access to within the Camera Controller
         self.camera_worker.standardCaptureFinished.connect(self.end_standard_capture)
         self.camera_worker.captureBackgroundFinished.connect(self.capture_background_complete)
+        self.camera_worker.brightestCentroidFound.connect(self.brightestCentroidFound.emit)
 
         # When finished, stop the thread, delete the camera worker, and delete the thread
         self.camera_worker.finished.connect(self.camera_thread.quit)
@@ -1622,6 +1728,10 @@ if __name__ == "__main__":
     # --- Camera image provider ---
     provider = CameraImageProvider()
     engine.addImageProvider("camera", provider)
+
+    # --- File path manager --- #
+    default_paths = PathManager()
+    engine.rootContext().setContextProperty("defaultPaths", default_paths.as_qml_urls())
 
     # --- Camera controller ---
     cam = CameraController()
@@ -1647,4 +1757,3 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     sys.exit(app.exec())
-
