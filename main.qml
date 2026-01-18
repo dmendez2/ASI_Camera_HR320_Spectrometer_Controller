@@ -1140,12 +1140,13 @@ Window {
                 // Calibration controls
                 RowLayout {
                     spacing: masterControlColumn.spacing * 0.1
-                    width: masterControlColumn.width * 0.7
+                    width: masterControlColumn.width * 0.9
 
                     Button {
                         id: calibrationBtn
                         text: "Calibrate"
                         enabled: false
+                        Layout.fillWidth: true
                         onClicked: cameraController.calibrateCamera()
 
                         Connections {
@@ -1160,6 +1161,7 @@ Window {
                         id: saveCalibration
                         text: "Save Calibration"
                         enabled: false
+                        Layout.fillWidth: true
                         onClicked: saveCalibrationDialog.open()
 
                         Connections {
@@ -1174,7 +1176,28 @@ Window {
                         id: loadCalibration
                         text: "Load Calibration File"
                         enabled: true
+                        Layout.fillWidth: true
                         onClicked: loadCalibrationDialog.open()
+                    }
+                }
+
+                RowLayout {
+                    spacing: masterControlColumn.spacing * 0.1
+                    width: masterControlColumn.width * 0.9
+
+                    Button{
+                        id: openSpectrumPlotButton
+                        text: "Plot Spectrum"
+                        enabled: false
+                        Layout.fillWidth: true
+                        onClicked: cameraController.show_spectrum_plot()
+
+                        Connections {
+                            target: cameraController
+                            function onCanShowWavelengthPlotChanged(canShow) {
+                                openSpectrumPlotButton.enabled = canShow
+                            }
+                        }
                     }
                 }
 
@@ -1366,11 +1389,41 @@ Window {
                     }
             }
 
+            FileDialog {
+                id: saveDialog
+                title: "Save as"
+                folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+                fileMode: FileDialog.SaveFile
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)", "PNG (*.png)"]
+
+                onAccepted: {
+                    cameraController.request_save_background(saveDialog.file)
+                    saveButton.enabled = false
+                }
+            }
+
+            FileDialog {
+                id: openBackgroundDialog
+                title: "Select a file"
+                folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+                fileMode: FileDialog.OpenFile
+                nameFilters: ["Numpy Matrix (*.npy)", "HDF5 File (*.hdf5)", "H5 File (*.h5)", "TIFF (*.tiff)", "TIF (*.tif)"]
+
+                onAccepted: {
+                    backgroundLoadPath = openBackgroundDialog.file.toString()
+                    cameraController.load_background_requested(backgroundLoadPath)
+
+                    subtractBtn1.enabled = false
+                    resetBtn1.enabled = false
+                    saveButton.enabled = false
+                }
+            }
+
             FileDialog{
                 id: snapshotFileDialog
                 title: "Save Frame To"
                 fileMode: FileDialog.SaveFile
-                nameFilters: ["Numpy File (*.npy)"]
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)", "PNG (*.png)"]
 
                 onAccepted: {
                     cameraController.request_save_snapshot(snapshotFileDialog.file.toString())
@@ -1394,7 +1447,7 @@ Window {
                 id: he_ne_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
-                nameFilters: ["Numpy Matrix (*.npy)"]
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
                     heNeFilePath = he_ne_fileDialog.file.toString()
@@ -1406,7 +1459,7 @@ Window {
                 id: ne_anchor_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
-                nameFilters: ["Numpy Matrix (*.npy)"]
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
                 //folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
 
                 onAccepted: {
@@ -1419,7 +1472,7 @@ Window {
                 id: ne_spectrum_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
-                nameFilters: ["Numpy Matrix (*.npy)"]
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
                     neCalibrationFilePath = ne_spectrum_fileDialog.file.toString()
@@ -1428,19 +1481,15 @@ Window {
             }
 
               FileDialog {
-                  id: openBackgroundDialog
-                  title: "Select a file"
+                  id: saveCalibrationDialog
+                  title: "Save as"
                   folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
-                  fileMode: FileDialog.OpenFile
-                  nameFilters: ["Numpy Matrix (*.npy)", "HDF5 File (*.hdf5)", "H5 File (*.h5)"]
+                  fileMode: FileDialog.SaveFile
+                  nameFilters: ["CSV File (*.csv)"]
 
                   onAccepted: {
-                      backgroundLoadPath = openBackgroundDialog.file.toString()
-                      cameraController.load_background_requested(backgroundLoadPath)
-
-                      subtractBtn1.enabled = false
-                      resetBtn1.enabled = false
-                      saveButton.enabled = false
+                      console.log("Saving to:", saveCalibrationDialog.file)
+                      cameraController.saveCalibrationFile(saveCalibrationDialog.file)
                   }
               }
 
@@ -1454,32 +1503,6 @@ Window {
                   onAccepted: {
                       cameraController.loadCalibrationFile( loadCalibrationDialog.file)
                       saveCalibration.enabled = false
-                  }
-              }
-
-              FileDialog {
-                  id: saveDialog
-                  title: "Save as"
-                  folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
-                  fileMode: FileDialog.SaveFile
-                  nameFilters: ["Numpy Matrix (*.npy)"]
-
-                  onAccepted: {
-                      cameraController.request_save_background(saveDialog.file)
-                      saveButton.enabled = false
-                  }
-              }
-
-              FileDialog {
-                  id: saveCalibrationDialog
-                  title: "Save as"
-                  folder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
-                  fileMode: FileDialog.SaveFile
-                  nameFilters: ["CSV File (*.csv)"]
-
-                  onAccepted: {
-                      console.log("Saving to:", saveCalibrationDialog.file)
-                      cameraController.saveCalibrationFile(saveCalibrationDialog.file)
                   }
               }
 

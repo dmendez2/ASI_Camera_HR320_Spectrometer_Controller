@@ -2,6 +2,7 @@ import os
 import sys
 import cv2
 import h5py
+import tifffile
 import numpy as np
 import pandas as pd
 import zwoasi as asi
@@ -12,13 +13,13 @@ from lmfit import minimize, Parameters
 from datetime import datetime, timezone
 
 from scipy.signal import find_peaks
-from scipy.optimize import curve_fit, linear_sum_assignment
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import curve_fit, linear_sum_assignment
 
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PySide6.QtCore import QObject, Signal, Slot, QTimer, QUrl, QThread, Qt
 
 class mockCamera():
@@ -354,10 +355,18 @@ class WavelengthCalibrator():
 
         # Flip the data along the X-axis since camera has the highest wavelengths on the left and the lowest on the right
         # We want the wavelengths to read low to high from left to right
-        Ne_Data = np.load(Ne_Data_Path)
+        Ne_Data = None
+        if Ne_Data_Path.endswith(".npy"):
+            Ne_Data = np.load(Ne_Data_Path)
+        elif Ne_Data_Path.endswith(".tiff") or Ne_Data_Path.endswith(".tif"):
+            Ne_Data = tifffile.imread(Ne_Data_Path)
         Ne_Data = np.flip(Ne_Data, axis = 1)
 
-        He_Ne_Line = np.load(He_Ne_Line_Path)
+        He_Ne_Line = None
+        if He_Ne_Line_Path.endswith(".npy"):
+            He_Ne_Line = np.load(He_Ne_Line_Path)
+        elif He_Ne_Line_Path.endswith(".tiff") or He_Ne_Line_Path.endswith(".tif"):
+            He_Ne_Line = tifffile.imread(He_Ne_Line_Path)
         He_Ne_Line = np.flip(He_Ne_Line, axis = 1)
 
         # Get Pixel Dimensions
@@ -431,7 +440,11 @@ class WavelengthCalibrator():
         self.lambda_c = lambda_c*1e-6
 
         # Read in the data and flip it to the correct orientation (Lower wavelengths on the left and higher wavelengths on the right)
-        data = np.load(Ne_Spectra_Path)
+        data = None
+        if Ne_Spectra_Path.endswith(".npy"):
+            data = np.load(Ne_Spectra_Path)
+        elif Ne_Spectra_Path.endswith(".tiff") or Ne_Spectra_Path.endswith(".tif"):
+            data = tifffile.imread(Ne_Spectra_Path)
         data = np.flip(data, axis = 1)
 
         # Get the peaks for the current Ne Spectra
@@ -496,19 +509,22 @@ class SpectrumPlot(QWidget):
         self.resize(800, 400)
 
         layout = QVBoxLayout(self)
-
         self.plot = pg.PlotWidget()
         self.plot.setLabel('bottom', 'Wavelength', units='nm')
         self.plot.setLabel('left', 'Intensity')
         self.plot.showGrid(x=True, y=True)
         self.plot.setBackground('k')
-
         self.curve = self.plot.plot(pen=pg.mkPen('c', width=2))
-
         layout.addWidget(self.plot)
 
     def update_spectrum(self, wavelength, intensity):
         self.curve.setData(wavelength, intensity)
+
+    def closeEvent(self, event):
+        """Instead of destroying the window, just hide it."""
+        event.ignore()
+        self.hide()
+
 
 class CameraImageProvider(QQuickImageProvider):
     def __init__(self):
@@ -726,8 +742,17 @@ class CameraWorker(QObject):
         self.canCaptureSnapshot = True
 
     @Slot(str)
-    def save_snapshot(self, file_path):
-        np.save(file_path, self.snapshot)
+    def save_snapshot(self, path):
+        if self.snapshot is not None:
+            if path.endswith(".npy"):
+                np.save(path, self.snapshot)
+            elif path.endswith(".tiff") or path.endswith(".tif"):
+                tifffile.imwrite(path, self.snapshot)
+            elif path.endswith(".png"):
+                # Convert to 8-bit for saving
+                bg_8bit = cv2.normalize(self.snapshot, None, 0, 255, cv2.NORM_MINMAX)
+                bg_8bit = bg_8bit.astype(np.uint8)
+                cv2.imwrite(path, bg_8bit)
 
     @Slot(int)
     def capture_background(self, n_frames):
@@ -740,6 +765,8 @@ class CameraWorker(QObject):
     def load_background(self, path):
         if path.endswith(".npy"):
             self.background = np.load(path)
+        elif path.endswith(".tiff") or path.endswith(".tif"):
+            self.background = tifffile.imread(path)
         elif path.endswith(".h5") or path.endswith(".hdf5"):
             with h5py.File(path, "r") as f:
                 if "background" not in f:
@@ -761,7 +788,15 @@ class CameraWorker(QObject):
     @Slot(str)
     def save_background(self, path):
         if self.background is not None:
-            np.save(path, self.background)
+            if path.endswith(".npy"):
+                np.save(path, self.background)
+            elif path.endswith(".tiff") or path.endswith(".tif"):
+                tifffile.imwrite(path, self.background)
+            elif path.endswith(".png"):
+                # Convert to 8-bit for saving
+                bg_8bit = cv2.normalize(self.background, None, 0, 255, cv2.NORM_MINMAX)
+                bg_8bit = bg_8bit.astype(np.uint8)
+                cv2.imwrite(path, bg_8bit)
 
     @Slot(bool)
     def set_can_save_raw(self, status):
@@ -867,9 +902,9 @@ class CameraWorker(QObject):
 
             # Compute Duration in Seconds of the Experiment
             start_iso = self.h5file.attrs["experiment_start_coordinated_universal_time"]
-            end_iso   = self.h5file.attrs["experiment_end_coordinated_universal_time"]
+            end_iso = self.h5file.attrs["experiment_end_coordinated_universal_time"]
             start_dt = datetime.fromisoformat(start_iso)
-            end_dt   = datetime.fromisoformat(end_iso)
+            end_dt = datetime.fromisoformat(end_iso)
 
             ### Duration Attribute ###
             self.h5file.attrs["duration (s)"] = (end_dt - start_dt).total_seconds()
@@ -968,6 +1003,7 @@ class CameraController(QObject):
     canSaveCalibrationChanged = Signal(bool)
     centralWavelengthChanged = Signal(float)
     wavelengthRangeChanged = Signal(float, float)
+    canShowWavelengthPlotChanged = Signal(bool)
     canStandardCaptureChanged = Signal(bool)
     canStartLiveCaptureChanged = Signal(bool)
     canEndLiveCaptureChanged = Signal(bool)
@@ -1069,6 +1105,10 @@ class CameraController(QObject):
         self.max_wavelength = 1000
         self.max_residual = None
 
+        # Spectrum Plotting Window
+        self.spectrum_plot = SpectrumPlot()
+        self.spectrum_plot.hide() # start hidden
+
         # Access cache to use previous calibrations
         if os.path.exists("cache/calibration.csv"):
             self.wavelength_calibrator.set_free_parameters(pd.read_csv("cache/calibration.csv"))
@@ -1167,8 +1207,9 @@ class CameraController(QObject):
             return
 
         # Ensure correct extension
-        if not file_path.endswith(".npy"):
-            file_path += ".npy"
+        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
+            self.errorOccurred.emit("Unsupported file path")
+            return
 
         # Assign the path to the Helium Neon Line Data to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
@@ -1187,8 +1228,9 @@ class CameraController(QObject):
             return
 
         # Ensure correct extension
-        if not file_path.endswith(".npy"):
-            file_path += ".npy"
+        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
+            self.errorOccurred.emit("Unsupported file path")
+            return
 
         # Assign the path to the 633 nm Neon Anchor Data to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
@@ -1207,8 +1249,9 @@ class CameraController(QObject):
             return
 
         # Ensure correct extension
-        if not file_path.endswith(".npy"):
-            file_path += ".npy"
+        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
+            self.errorOccurred.emit("Unsupported file path")
+            return
 
         # Assign the path to the Neon Data we need to calibrate to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
@@ -1246,6 +1289,7 @@ class CameraController(QObject):
             self.calibrationVariablesRequested.emit(free_parameters['Pc'], free_parameters['Dv'], free_parameters['gamma'], free_parameters['lambda_c'])
             self.maxResidualRequested.emit(self.max_residual)
             self.canSaveCalibrationChanged.emit(True)
+            self.canShowWavelengthPlotChanged.emit(True)
 
     @Slot(str)
     def loadCalibrationFile(self, qt_file_path):
@@ -1297,6 +1341,8 @@ class CameraController(QObject):
             self.notApplicableResidual.emit()
             self.isCalibrated.emit("Loaded")
 
+            self.canShowWavelengthPlotChanged.emit(True)
+
     @Slot(str)
     def saveCalibrationFile(self, qt_save_path):
         url = QUrl(qt_save_path)
@@ -1317,6 +1363,13 @@ class CameraController(QObject):
 
             df = pd.DataFrame(optimal_parameters, index = [0])
             df.to_csv(save_path)
+
+    @Slot()
+    def show_spectrum_plot(self):
+        if hasattr(self, 'spectrum_plot'):
+            self.spectrum_plot.show()
+            self.spectrum_plot.raise_()
+            self.spectrum_plot.activateWindow()
 
     @Slot()
     def request_capture_background(self):
@@ -1370,8 +1423,11 @@ class CameraController(QObject):
             self.errorOccurred.emit("Error, File Path Not Valid")
             return
 
-        if not save_path.endswith(".npy"):
-            save_path += ".npy"
+        # Ensure correct extension
+        if not (save_path.endswith(".npy") or save_path.endswith(".tiff") or save_path.endswith(".tif") or save_path.endswith(".png")):
+            self.errorOccurred.emit("Unsupported background file type")
+            return
+
         self.saveBackgroundRequested.emit(save_path)
 
     @Slot(str)
@@ -1388,7 +1444,7 @@ class CameraController(QObject):
                 return
 
             # Ensure correct extension
-            if not (file_path.endswith(".npy") or file_path.endswith(".hdf5") or file_path.endswith(".h5")):
+            if not (file_path.endswith(".npy") or file_path.endswith(".hdf5") or file_path.endswith(".h5") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
                 self.errorOccurred.emit("Unsupported background file type")
                 return
 
@@ -1412,8 +1468,9 @@ class CameraController(QObject):
             return
 
         # Ensure correct extension
-        if not file_path.endswith(".npy"):
-            file_path += ".npy"
+        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif") or file_path.endswith(".png")):
+            self.errorOccurred.emit("Unsupported background file type")
+            return
 
         self.saveSnapshotRequested.emit(file_path)
 
@@ -1562,23 +1619,32 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     engine = QQmlApplicationEngine()
 
+    # --- Camera image provider ---
     provider = CameraImageProvider()
     engine.addImageProvider("camera", provider)
 
+    # --- Camera controller ---
     cam = CameraController()
-    cam.frameReady.connect(provider.updateImage)
     engine.rootContext().setContextProperty("cameraController", cam)
 
+    # --- Spectrum plot window ---
     plot = SpectrumPlot()
-    plot.show()
+    cam.spectrum_plot = plot  # store reference in controller
 
+    # --- Connect CameraWorker to SpectrumPlot ---
     def on_worker_ready(worker):
-        worker.spectrumReady.connect(plot.update_spectrum, Qt.QueuedConnection)
+        worker.spectrumReady.connect(cam.spectrum_plot.update_spectrum)
 
     cam.workerReady.connect(on_worker_ready)
-    cam.start_camera_worker()
 
+    # --- Start camera worker thread ---
+    cam.start_camera_worker()
+    cam.frameReady.connect(provider.updateImage)
+
+    # --- Load QML ---
     engine.load("main.qml")
     if not engine.rootObjects():
         sys.exit(-1)
+
     sys.exit(app.exec())
+
