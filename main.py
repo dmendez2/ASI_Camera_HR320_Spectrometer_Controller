@@ -12,6 +12,7 @@ from collections import deque
 from lmfit import minimize, Parameters
 from datetime import datetime, timezone
 
+from scipy import ndimage
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit, linear_sum_assignment
@@ -89,9 +90,7 @@ class mockCamera():
         return
 
     def get_video_data(self):
-        data = np.random.randint(0, 65535, self.height * self.width).astype(np.uint16)
-        idx = self.height//2 * self.width + self.width//2
-        data[idx] = 65535  # brightest pixel
+        data = np.random.randint(0, 65536, self.height * self.width).astype(np.uint16)
         return data
 
 ### All Internal Variables Length Scale Held at Millimeters (mm) For Ease of Calculations ###
@@ -114,8 +113,8 @@ class WavelengthCalibrator():
         self.P_Max = 6247 # Pixel Number Corresponding to Maximum Wavelength
         self.Pc = 1593 # Center Pixel Number (Actual value according to documentation is 3124 but according to measurements done with a He-Ne Laser with single line at 632.8 nm, the true center is at about 1590)
 
-        ### Wavelength Parameters --> The Central Wavelength for Calibration is 633 nm and the Max-Min Wavelengths Will Be Computed Later ###
-        self.lambda_c = 633 * 1e-6 # Central Wavelength of Spectrometer (mm)
+        ### Wavelength Parameters ###
+        self.lambda_c = None # Central Wavelength of Spectrometer (mm)
         self.Wl_Min = None # The Minimum Wavelength Detectable by the Spectrometer (mm)
         self.Wl_Max = None # Maximum Wavelength Detectable by the Spectrometer (mm)
 
@@ -131,7 +130,6 @@ class WavelengthCalibrator():
         self.Pc = 1593 # Central Pixel
         self.Dv = 24 * (np.pi/180) # Deviation Angle (Radians)
         self.gamma = 2.417 * (np.pi/180) # Rotation of grating relative to focal plane (Radians)
-        self.lambda_c = 633 * 1e-6 # Central Wavelength (nm)
 
     ### Function to Match Computed Lines to Nearest NIST Reference Line ###
     # We match the lines by doing a linear sum assignment which implements the Hungarian Algorithm
@@ -185,9 +183,9 @@ class WavelengthCalibrator():
         return A*np.exp(-(x-P0)**2/(2*sigma**2)) + B
 
     # Function extracts peaks by searching for peaks which have a prominence greater than the minimum
-    # The default prominence is set to 0.0001, which means we define a peak as a signal which takes up 0.01% of the area or greater
+    # The default prominence is set to 0.0005, which means we define a peak as a signal which takes up 0.05% of the area or greater
     # Once peaks are determined, we apply a Gaussian fit to get the most accurate peak center
-    def Extract_Peak_Centers(self, data, prominence = 0.0001):
+    def Extract_Peak_Centers(self, data, prominence = 0.0005):
         # Convert to 32-bit to prevent overflow errors
         data = data.astype(np.float32, copy = False)
 
@@ -356,31 +354,32 @@ class WavelengthCalibrator():
     # To Calibrate, we First Utilized a Reference He-Ne Laser with a Single Known Wavelength of 632.81646 nm
     # A Peak Finding Algorithm was Used to Find the Pixel Position of the He-Ne Line and Later, here, the Lines for the Ne Spectrum
     # The Spectrometer was Dialed to a Center Wavelength of 633 nm so the He_Ne Line is Roughly at the Center Pixel Position --> ~Pixel 1593
-    # With the Center Pixel Position Determined, we can then Estimate the Wavelengths of the Ne I Spectra Lines (Also centered to 633 nm when they were measured)
+    # With the Center Pixel Position Determined, we can then Estimate the Wavelengths of the Ne I Spectra Lines
     # The Estimated Wavelengths are then Matched to the Closest Wavelengths in the NIST Reference Spectrum
-    # The Center Pixel Position, the Deviation Angle, and the Tilt Angle are then Varied and Utilized to Compute Pixel Positions Using the Matched Reference Wavelengths
+    # The Center Pixel Position, the Deviation Angle, the central wavelength, and the Tilt Angle are then Varied and Utilized to Compute Pixel Positions Using the Matched Reference Wavelengths
     # Residuals Between the Computed Pixel Position and the True Measured Pixel Positions are then Determined
     # A Least Squares Fit is Conducted to Minimize the Residuals and Find the Best Fit Parameter Combination Which Become the Calibrated Values
-    def Calibrate(self, Ne_Data_Path, Nist_Reference_Path):
+    def Calibrate(self, Spectral_Data_Path, Nist_Reference_Path, lambda_c):
+        # Set new central wavelength
+        self.lambda_c = lambda_c*1e-6
+
         # Preprocess the NIST Reference Spectra
         self.reference_spectra = pd.read_csv(Nist_Reference_Path)[['obs_wl_air(nm)', 'intens', 'Aki(s^-1)']].astype(float).dropna() # Reference Ne I spectral line wavelength --> From NIST (nm)
         self.reference_spectra['obs_wl_air(nm)'] *= 1e-6 # Convert wavelengths to millimeters for later calculations (mm)
         self.reference_spectra.rename(columns = {'obs_wl_air(nm)': 'obs_wl_air(mm)'}, inplace = True) # Rename column to reflect unit change
 
-        # Flip the data along the X-axis since camera has the highest wavelengths on the left and the lowest on the right
-        # We want the wavelengths to read low to high from left to right
-        Ne_Data = None
-        if Ne_Data_Path.endswith(".npy"):
-            Ne_Data = np.load(Ne_Data_Path)
-        elif Ne_Data_Path.endswith(".tiff") or Ne_Data_Path.endswith(".tif"):
-            Ne_Data = tifffile.imread(Ne_Data_Path)
-        Ne_Data = np.flip(Ne_Data, axis = 1)
+        # Read in the data
+        Spectral_Data = None
+        if Spectral_Data_Path.endswith(".npy"):
+            Spectral_Data = np.load(Spectral_Data_Path)
+        elif Spectral_Data_Path.endswith(".tiff") or Spectral_Data_Path.endswith(".tif"):
+            Spectral_Data = tifffile.imread(Spectral_Data_Path)
 
         # Get Pixel Dimensions
-        l,w = Ne_Data.shape
+        l,w = Spectral_Data.shape
 
         # Extract the Peak Centers from the measured Ne Spectrum
-        spectrum, P_measured = self.Extract_Peak_Centers(Ne_Data)
+        spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data)
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
         # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
@@ -405,7 +404,7 @@ class WavelengthCalibrator():
             params.add('n', value = self.n, vary = False)
             params.add('F', value = self.F, vary = False)
             params.add('Pw', value = self.Pw, vary = False)
-            params.add('lambda_c', value = self.lambda_c, vary = False)
+            params.add('lambda_c', value = self.lambda_c, vary = True, min = self.lambda_c - self.lambda_c*0.01, max = self.lambda_c + self.lambda_c*0.01)
             params.add('Pc', value = self.Pc, vary = True, min = self.Pc - self.Pc*0.1, max = self.Pc + self.Pc*0.1)
             params.add('Dv', value = self.Dv, vary = True, min = self.Dv - self.Dv*0.2, max = self.Dv + self.Dv*0.2)
             params.add('gamma', value = self.gamma, vary = True, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
@@ -420,73 +419,6 @@ class WavelengthCalibrator():
             self.Dv = float(least_squares_fitter.params['Dv'])
             self.gamma = float(least_squares_fitter.params['gamma'])
             self.Pc = int(least_squares_fitter.params['Pc'])
-
-            # Compute the minimum wavelength that can be resolved from our diffraction grating
-            d_lambda = self.Dlambda(self.n, self.width, self.lambda_c)
-
-            # Compute the residual between the reference wavelength and the calibrated wavelength
-            residuals = np.abs(lambda_ref - calibrated_wavelengths)
-
-            # Update the iteration count
-            iter += 1
-        return
-
-    # Once the parameters have been calibrated, the computation of wavelengths should be extremely close to the true wavelengths plus/minus an offset
-    # This offset is due to the central wavelength on the spectrometer dial not being completely exact
-    # We therefore shift the central wavelength while ensuring we fit to Ne I reference lines which ensures we correct for the offset
-    # Once the parameters have been calibrated, the computation of wavelengths should be extremely close to the true wavelengths plus/minus an offset
-    # This offset is due to the central wavelength on the spectrometer dial not being completely exact
-    # We therefore shift the central wavelength while ensuring we fit to Ne I reference lines which ensures we correct for the offset
-    def Central_Wavelength_Shift(self, Ne_Spectra_Path, lambda_c):
-        # Set a new central wavelength
-        self.lambda_c = lambda_c*1e-6
-
-        # Read in the data and flip it to the correct orientation (Lower wavelengths on the left and higher wavelengths on the right)
-        data = None
-        if Ne_Spectra_Path.endswith(".npy"):
-            data = np.load(Ne_Spectra_Path)
-        elif Ne_Spectra_Path.endswith(".tiff") or Ne_Spectra_Path.endswith(".tif"):
-            data = tifffile.imread(Ne_Spectra_Path)
-        data = np.flip(data, axis = 1)
-
-        # Get the peaks for the current Ne Spectra
-        spectrum, P_measured = self.Extract_Peak_Centers(data)
-
-        # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
-        # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
-        d_lambda = self.Dlambda(self.n, self.width, self.lambda_c)
-        residuals = np.ones(len(P_measured)) * np.inf
-        iter = 0
-        while(np.any(residuals > d_lambda) and iter < 5):
-            # Get the minimum and maximum wavelength for the current central wavelength
-            self.Wl_Min = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Min)
-            self.Wl_Max = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, self.P_Max)
-
-            # Compute the wavelengths from the current calibrated parameters
-            lambda_0 = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, P_measured)
-
-            # Find the closest fitting NIST reference wavelengths to the computed wavelengths
-            lambda_ref = self.Process_Reference_Spectra(lambda_0, self.Wl_Min, self.Wl_Max, self.transition_probability_threshold, self.intensity_threshold)
-
-            # Create a parameter dictionary for our spectrometer/camera parameters to pass into the least squares fitting algorithm
-            # We only vary the central wavelength, lambda_c, to correct the offset
-            params = Parameters()
-            params.add('k', value = self.k, vary = False)
-            params.add('n', value = self.n, vary = False)
-            params.add('F', value = self.F, vary = False)
-            params.add('Pw', value = self.Pw, vary = False)
-            params.add('Pc', value = self.Pc, vary = False)
-            params.add('Dv', value = self.Dv, vary = False)
-            params.add('gamma', value = self.gamma, vary = False)
-            params.add('lambda_c', value = self.lambda_c, vary = True, min = self.lambda_c - self.lambda_c*0.1, max = self.lambda_c + self.lambda_c*0.1)
-
-            # We minimize the square of the residual to determine the best fit central wavelength
-            least_squares_fitter = minimize(self.residual, params, args=(P_measured, lambda_ref), method = 'least_squares')
-
-            # Compute the Wavelengths from the Measured Pixel Positions with the Calibrated Parameters
-            calibrated_wavelengths = self.Get_Wavelength_From_Pixel(least_squares_fitter.params['k'], least_squares_fitter.params['n'], least_squares_fitter.params['F'], least_squares_fitter.params['Dv'], least_squares_fitter.params['gamma'], least_squares_fitter.params['Pw'], least_squares_fitter.params['Pc'], least_squares_fitter.params['lambda_c'], P_measured)
-
-            # Set the internal central wavelength to the calibrated central wavelength
             self.lambda_c = float(least_squares_fitter.params['lambda_c'])
 
             # Compute the minimum wavelength that can be resolved from our diffraction grating
@@ -507,19 +439,73 @@ class WavelengthCalibrator():
 class SpectrumPlot(QWidget):
     def __init__(self):
         super().__init__()
+
+        self.wavelength = None
+        self.intensity = None
+
+        # Create the window for the plotter
         self.setWindowTitle("Live Spectrum")
         self.resize(800, 400)
 
+        # Create the layout box within the window where the plot lives
         layout = QVBoxLayout(self)
+
+        # Normal plotting stuff: Label naming, drawing the grid, making the background black
         self.plot = pg.PlotWidget()
         self.plot.setLabel('bottom', 'Wavelength', units='nm')
         self.plot.setLabel('left', 'Intensity')
         self.plot.showGrid(x=True, y=True)
         self.plot.setBackground('k')
+
+        # Add text to follow the mouse which will display the wavelength
+        self.plot.setMouseEnabled(x = True, y = False)
+        self.text = pg.TextItem(color='w', anchor=(0, 1))
+        self.plot.addItem(self.text)
+
+        # Make the mouse a cross-hair
+        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('y'))
+        self.hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('y'))
+        self.plot.addItem(self.vline, ignoreBounds=True)
+        self.plot.addItem(self.hline, ignoreBounds=True)
+
+        # Determine the thickness of the grid and labels
         self.curve = self.plot.plot(pen=pg.mkPen('c', width=2))
+
+        # Attach signals to the mouse-text system
+        self.proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved, rateLimit=60,slot=self.mouse_moved)
+
+        # Add the plotting widget to the layout
         layout.addWidget(self.plot)
 
+    # As the mouse moves, write the corresponding wavelength for that part of the plot
+    def mouse_moved(self, evt):
+        if not hasattr(self, "wavelength"):
+            return
+
+        pos = evt[0]
+        if not self.plot.sceneBoundingRect().contains(pos):
+            return
+
+        mousePoint = self.plot.getPlotItem().vb.mapSceneToView(pos)
+        x = mousePoint.x()
+
+        idx = np.abs(self.wavelength - x).argmin()
+
+        x_snap = self.wavelength[idx]
+        y_snap = self.intensity[idx]
+
+        self.vline.setPos(x_snap)
+        self.hline.setPos(y_snap)
+
+        self.text.setText(f"λ = {x_snap:.2f} nm")
+        self.text.setPos(x_snap, y_snap)
+
+
+    # Give the wavelength data to the plotter
     def update_spectrum(self, wavelength, intensity):
+        self.wavelength = wavelength
+        self.intensity = intensity
+
         self.curve.setData(wavelength, intensity)
 
     def closeEvent(self, event):
@@ -536,6 +522,12 @@ class PathManager:
         self.snapshots_dir   = self.base_dir / "snapshots"
         self.data_dir        = self.base_dir / "data"
 
+        self.standard_capture_dir  = self.data_dir / "standard_capture"
+        self.live_capture_dir      = self.data_dir / "live_capture"
+
+        self.NIST_dir              = self.calibration_dir / "NIST_References"
+        self.spectral_data_dir     = self.calibration_dir / "spectral_data"
+
         self._ensure_directories()
 
     def _get_base_dir(self) -> Path:
@@ -545,15 +537,18 @@ class PathManager:
         return Path(__file__).resolve().parent
 
     def _ensure_directories(self):
-        for path in [self.calibration_dir,self.background_dir,self.snapshots_dir,self.data_dir]:
+        for path in [self.calibration_dir,self.background_dir,self.snapshots_dir,self.data_dir, self.standard_capture_dir, self.live_capture_dir, self.NIST_dir, self.spectral_data_dir]:
             path.mkdir(parents=True, exist_ok=True)
 
     def as_qml_urls(self) -> dict:
         return {
                     "calibration": QUrl.fromLocalFile(str(self.calibration_dir)),
+                    "NIST": QUrl.fromLocalFile(str(self.NIST_dir)),
+                    "spectral_data": QUrl.fromLocalFile(str(self.spectral_data_dir)),
                     "background":  QUrl.fromLocalFile(str(self.background_dir)),
                     "snapshots":   QUrl.fromLocalFile(str(self.snapshots_dir)),
-                    "data":        QUrl.fromLocalFile(str(self.data_dir)),
+                    "standard_capture":        QUrl.fromLocalFile(str(self.standard_capture_dir)),
+                    "live_capture":        QUrl.fromLocalFile(str(self.live_capture_dir))
                 }
 
 class CameraImageProvider(QQuickImageProvider):
@@ -571,7 +566,7 @@ class CameraImageProvider(QQuickImageProvider):
 class CameraWorker(QObject):
     frameReady = Signal(QImage)  # for display
     spectrumReady = Signal(object, object)  # wavelength, intensity
-    brightestCentroidFound = Signal(int, int)
+    brightestClusterFound = Signal(int, int)
     standardCaptureFinished = Signal()
     captureBackgroundFinished = Signal()
     finished = Signal()
@@ -647,11 +642,32 @@ class CameraWorker(QObject):
         self.spectrum_timer = QTimer(self)
         self.spectrum_timer.timeout.connect(self.emit_spectrum)
 
+    @Slot()
     def start(self):
+        self.isThreadRunning = True
         self.timer.start(500)
         self.save_timer.start(2000)  # write at 20 Hz
         self.spectrum_timer.start(200)  # 5 Hz
-        #self.timer.start(int(exposure_ms * 1.1))
+
+    @Slot()
+    def stop(self):
+        # Stop timers first
+        if self.timer.isActive():
+            self.timer.stop()
+        if self.save_timer.isActive():
+            self.save_timer.stop()
+        if self.spectrum_timer.isActive():
+            self.spectrum_timer.stop()
+
+        # Flush and close files safely
+        try:
+            self.flush_save_queue()
+            self.close_h5_file()
+        except Exception:
+            pass
+
+        self.isThreadRunning = False
+        self.finished.emit()
 
     def flush_save_queue(self):
         if not self.live_capture_running and not self.can_standard_capture:
@@ -750,6 +766,9 @@ class CameraWorker(QObject):
 
     # Acquire the frame and convert from 16 bit buffer to human readable integer format
     def acquire_frame(self):
+        if not self.isThreadRunning:
+            return np.zeros((self.max_height, self.max_width), dtype=np.uint16)
+
         raw_data = self.cam.get_video_data()
         frame = np.frombuffer(raw_data, dtype=np.uint16).reshape(self.max_height, self.max_width)
         return frame
@@ -771,28 +790,51 @@ class CameraWorker(QObject):
         self.spectrumReady.emit(wavelength, intensity)
 
     @Slot()
-    def find_brightest_centroid(self):
+    def find_brightest_cluster(self):
         if self.latest_frame is None:
             return
 
-        # Computing centroids consists of a lot of summing so we convert to float64 to ensure no overflow
-        # Also, a centroid is an average so we need to switch from integers to floats to make sure float division is safe
+        # Ensure safe type
         frame = self.latest_frame.astype(np.float64, copy=False)
 
-        # Create coordinate grids
-        Y, X = np.indices(frame.shape)
+        # Create a threshold, anything with brightness below this threshold will not be taken into account
+        intensity_threshold = 0.9 * frame.max()
+        mask = frame > intensity_threshold
 
-        total_intensity = frame.sum()
-        if total_intensity == 0:
-            # fallback if frame is empty
-            return frame.shape[1] / 2, frame.shape[0] / 2
+        # Break up all connected pixels into clusters
+        labels, num_labels = ndimage.label(mask)
 
-        # Compute weighted averages to get the x and y centroid positions
-        x_c = (frame * X).sum() / total_intensity
-        y_c = (frame * Y).sum() / total_intensity
+        # Get the number of pixels in each labeled cluster
+        sizes = np.array(ndimage.sum(mask, labels, range(1, num_labels+1)))  # exclude label 0 (background)
 
-        # Send the most intense pixel centroid position to the QML Display
-        self.brightestCentroidFound.emit(x_c, y_c)
+        # Filter out tiny clusters
+        min_size = 1000  # ignore clusters smaller than 1000 pixels
+        keep_labels = np.where(sizes >= min_size)[0] + 1  # +1 because labels start at 1
+
+        # Find the label of the cluster which has the most intensity. Cycle through each cluster and sum the intensity of each of its pixels.
+        # This is a function of number of pixels and of raw intensity
+        best_label = None
+        best_power = -1
+        for label in keep_labels:
+            blob_mask = labels == label
+            power = frame[blob_mask].sum()
+            if power > best_power:
+                best_power = power
+                best_label = label
+
+        if best_label == None:
+            return
+
+        # Get the brightest cluster and get all its pixels' x,y coordinates
+        brightest_cluster = frame * (labels == best_label)
+        ys, xs = np.indices(frame.shape)
+
+        # Compute the centroid of the brightest cluster
+        xc = (brightest_cluster * xs).sum() / brightest_cluster.sum()
+        yc = (brightest_cluster * ys).sum() / brightest_cluster.sum()
+
+        # Send the most intense cluster centroid position to the QML Display
+        self.brightestClusterFound.emit(xc, yc)
 
     @Slot(int, float, float, float)
     def set_wavelength_calibration_variables(self, Pc, Dv, gamma, lambda_c):
@@ -1061,6 +1103,15 @@ class CameraWorker(QObject):
     def get_exposure(self, exposure):
         self.exposure = exposure
 
+        # Get a new time step for the display timer
+        period_ms = max(1, int(self.exposure * 1.1))
+
+        if self.timer.isActive():
+            self.timer.stop()
+
+        self.timer.start(period_ms)
+
+
     @Slot(int)
     def get_target_temp(self, target_temp):
         self.target_temp = target_temp
@@ -1086,7 +1137,7 @@ class CameraWorker(QObject):
 class CameraController(QObject):
     # User Interface Signals
     frameReady = Signal(QImage)
-    brightestCentroidFound = Signal(int, int)
+    brightestClusterFound = Signal(int, int)
     gainRangeChanged = Signal(int, int)
     exposureRangeChanged = Signal(int, int)
     tempRangeChanged = Signal(int, int)
@@ -1116,7 +1167,7 @@ class CameraController(QObject):
 
     # Worker Signals
     calibrationVariablesRequested = Signal(int, float, float, float)
-    brightestCentroidRequested = Signal()
+    brightestClusterRequested = Signal()
     gainRequested = Signal(int)
     exposureRequested = Signal(int)
     targetTempRequested = Signal(int)
@@ -1194,8 +1245,7 @@ class CameraController(QObject):
         self.isCalibrationReadyToUse = False
 
         self.Nist_Reference_Path = None
-        self.Ne_633_Anchor_Path = None
-        self.Ne_Calibration_Path = None
+        self.Spectral_Data_Path = None
 
         self.min_wavelength = 400
         self.approximate_central_wavelength = 700
@@ -1224,8 +1274,8 @@ class CameraController(QObject):
         self.tempRangeChanged.emit(self.temp_min, self.temp_max)
 
     @Slot()
-    def find_brightest_centroid_requested(self):
-        self.brightestCentroidRequested.emit()
+    def find_brightest_cluster_requested(self):
+        self.brightestClusterRequested.emit()
 
     @Slot(int)
     def setNBackgroundFrames(self, n):
@@ -1277,7 +1327,7 @@ class CameraController(QObject):
             self.errorOccurred.emit("Error setting anti-dew heater: ", e)
 
     def isCalibrationReady(self):
-        return (self.Nist_Reference_Path is not None) and (self.Ne_633_Anchor_Path is not None) and (self.Ne_Calibration_Path is not None)
+        return (self.Nist_Reference_Path is not None) and (self.Spectral_Data_Path is not None)
 
     @Slot(str)
     def setNistReferencePath(self, qt_file_path):
@@ -1300,27 +1350,6 @@ class CameraController(QObject):
             self.canCalibrate.emit(True)
 
     @Slot(str)
-    def setNe633AnchorPath(self, qt_file_path):
-        url = QUrl(qt_file_path)
-        file_path = ""
-        if url.isValid():
-            file_path = url.toLocalFile()
-        else:
-            self.errorOccurred.emit("Error, File Path Not Valid")
-            return
-
-        # Ensure correct extension
-        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
-            self.errorOccurred.emit("Unsupported file path")
-            return
-
-        # Assign the path to the 633 nm Neon Anchor Data to the input file path.
-        # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
-        self.Ne_633_Anchor_Path = file_path
-        if(self.isCalibrationReady()):
-            self.canCalibrate.emit(True)
-
-    @Slot(str)
     def setNeCalibrationPath(self, qt_file_path):
         url = QUrl(qt_file_path)
         file_path = ""
@@ -1337,7 +1366,7 @@ class CameraController(QObject):
 
         # Assign the path to the Neon Data we need to calibrate to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
-        self.Ne_Calibration_Path = file_path
+        self.Spectral_Data_Path = file_path
         if(self.isCalibrationReady()):
             self.canCalibrate.emit(True)
 
@@ -1351,8 +1380,7 @@ class CameraController(QObject):
             self.errorOccurred.emit("Cannot calibrate while acquiring data")
         else:
             self.wavelength_calibrator.Reset()
-            self.wavelength_calibrator.Calibrate(self.Ne_633_Anchor_Path, self.Nist_Reference_Path)
-            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Central_Wavelength_Shift(self.Ne_Calibration_Path, self.approximate_central_wavelength)
+            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Spectral_Data_Path, self.Nist_Reference_Path, self.approximate_central_wavelength)
             self.min_wavelength, self.max_wavelength = self.wavelength_calibrator.Get_Wavelength_Range()
 
             if self.calibrationStatus:
@@ -1681,12 +1709,12 @@ class CameraController(QObject):
         self.standardCaptureRequested.connect(self.camera_worker.start_standard_capture)
         self.snapshotRequested.connect(self.camera_worker.capture_snapshot)
         self.saveSnapshotRequested.connect(self.camera_worker.save_snapshot)
-        self.brightestCentroidRequested.connect(self.camera_worker.find_brightest_centroid)
+        self.brightestClusterRequested.connect(self.camera_worker.find_brightest_cluster)
 
         # Connect all functions that the Camera Worker needs access to within the Camera Controller
         self.camera_worker.standardCaptureFinished.connect(self.end_standard_capture)
         self.camera_worker.captureBackgroundFinished.connect(self.capture_background_complete)
-        self.camera_worker.brightestCentroidFound.connect(self.brightestCentroidFound.emit)
+        self.camera_worker.brightestClusterFound.connect(self.brightestClusterFound.emit)
 
         # When finished, stop the thread, delete the camera worker, and delete the thread
         self.camera_worker.finished.connect(self.camera_thread.quit)
@@ -1700,7 +1728,7 @@ class CameraController(QObject):
         self.camera_thread.start()
 
     def stop_worker(self):
-        self._worker.stop()
+        self.camera_worker.stop()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

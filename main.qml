@@ -60,7 +60,7 @@ Window {
 
         TapHandler {
             acceptedButtons: Qt.LeftButton
-            onDoubleTapped: cameraController.find_brightest_centroid_requested()
+            onDoubleTapped: cameraController.find_brightest_cluster_requested()
         }
 
         Connections {
@@ -69,7 +69,7 @@ Window {
                 liveFeed.source = "image://camera/live?" + Date.now()
             }
 
-            function onBrightestCentroidFound(x, y) {
+            function onBrightestClusterFound(x, y) {
                 imageFlick.contentX = Math.max(0, x - imageFlick.width / 2)
                 imageFlick.contentY = Math.max(0, y - imageFlick.height / 2)
             }
@@ -1078,43 +1078,14 @@ Window {
                     width: masterControlColumn.width * 0.9
 
                     Button {
-                        id: ne_anchor_button
-                        text: "Load 633 Centered Ne I Data"
-                        onClicked: ne_anchor_fileDialog.open()
+                        id: spectrum_button
+                        text: "Load Spectral Data to Calibrate"
+                        onClicked: spectrum_fileDialog.open()
                     }
 
                     Rectangle {
                         Layout.fillWidth: true
-                        height: ne_anchor_button.height
-                        radius: 4
-                        border.color: "#888"
-                        color: "#f5f5f5"
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            verticalAlignment: Text.AlignVCenter
-
-                            text: neAnchorFilePath
-                            elide: Text.ElideLeft     // Clip path nicely
-                            clip: true
-                        }
-                    }
-                }
-
-                RowLayout {
-                    spacing: 20
-                    width: masterControlColumn.width * 0.9
-
-                    Button {
-                        id: ne_spectrum_button
-                        text: "Load Ne I Data to Calibrate"
-                        onClicked: ne_spectrum_fileDialog.open()
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: ne_spectrum_button.height
+                        height: spectrum_button.height
                         radius: 4
                         border.color: "#888"
                         color: "#f5f5f5"
@@ -1437,7 +1408,7 @@ Window {
                 id: saveFramesForStandardCaptureFileDialog
                 title: "Save Data To"
                 fileMode: FileDialog.SaveFile
-                folder: defaultPaths["data"]
+                folder: defaultPaths["standard_capture"]
                 nameFilters: ["HDF5 File (*.hdf5)"]
 
                 onAccepted: {
@@ -1451,7 +1422,7 @@ Window {
                 id: saveFramesForLiveCaptureFileDialog
                 title: "Save Data To"
                 fileMode: FileDialog.SaveFile
-                folder: defaultPaths["data"]
+                folder: defaultPaths["live_capture"]
                 nameFilters: ["HDF5 File (*.hdf5)"]
 
                 onAccepted: {
@@ -1508,7 +1479,7 @@ Window {
                 id: nist_reference_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
-                folder: defaultPaths["calibration"]
+                folder: defaultPaths["NIST"]
                 nameFilters: ["CSV (*.csv)"]
 
                 onAccepted: {
@@ -1518,27 +1489,14 @@ Window {
             }
 
             FileDialog {
-                id: ne_anchor_fileDialog
+                id: spectrum_fileDialog
                 title: "Select a file"
                 fileMode: FileDialog.OpenFile
-                folder: defaultPaths["calibration"]
+                folder: defaultPaths["spectral_data"]
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
-                    neAnchorFilePath = ne_anchor_fileDialog.file.toString()
-                    cameraController.setNe633AnchorPath(neAnchorFilePath)
-                }
-            }
-
-            FileDialog {
-                id: ne_spectrum_fileDialog
-                title: "Select a file"
-                fileMode: FileDialog.OpenFile
-                folder: defaultPaths["calibration"]
-                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
-
-                onAccepted: {
-                    neCalibrationFilePath = ne_spectrum_fileDialog.file.toString()
+                    neCalibrationFilePath = spectrum_fileDialog.file.toString()
                     cameraController.setNeCalibrationPath(neCalibrationFilePath)
                 }
             }
