@@ -121,10 +121,6 @@ class WavelengthCalibrator():
         ### The Reference Ne I spectra from NIST ###
         self.reference_spectra = None # Reference Ne I spectral line wavelength --> From NIST (nm) later converted to (mm)
 
-        ### Other Relavent Variables Related to the NIST Reference Spectra ###
-        self.transition_probability_threshold = 4.0 * 1e6 # Apparent minimum transition rate probability detectable by spectrometer (1/s)
-        self.intensity_threshold = 5000 # Apparent minimum relative intensity detectable by spectrometer
-
     # Reset all variables to default manufacturer variables
     def Reset(self):
         self.Pc = 1593 # Central Pixel
@@ -155,20 +151,27 @@ class WavelengthCalibrator():
     # We match row 1 to column 1
     # We match row 2 to column 2 OR 3
     # We match row 3 to column 3 OR 4 (Must be column 4 if row 2 was matched to column 3)
-    def Process_Reference_Spectra(self, lambda_0, Wl_Min, Wl_Max, transition_rate_threshold, intensity_threshold, Wl_buffer = 2.0):
+    def Process_Reference_Spectra(self, lambda_0, Wl_Min, Wl_Max, Wl_buffer = 2.0*1e-6):
         # Filter the reference spectrum to only include the wavelengths between the theoretical minimum and maximum wavelengths (plus or minus a buffer) calculated by the calibrator algorithm with the initial parameters as provided by the spectrometer and camera parameters
-        # Also, filter by the minimum transition rate threshold that can be determiend by the spectrometer (This is determined through trial and error so may not be completely accurate)
         Wl_Min -= Wl_buffer
         Wl_Max += Wl_buffer
-        spectra = self.reference_spectra[(self.reference_spectra['obs_wl_air(mm)'] > Wl_Min) & (self.reference_spectra['obs_wl_air(mm)'] < Wl_Max) & ( (self.reference_spectra['Aki(s^-1)'] > transition_rate_threshold) | (self.reference_spectra['intens'] >= intensity_threshold) )]
+        spectra = self.reference_spectra[(self.reference_spectra['obs_wl_air(mm)'] > Wl_Min) & (self.reference_spectra['obs_wl_air(mm)'] < Wl_Max)]
+
+        # Filter the spectra so it only contains wavelengths between the minimum and maximum wavelength
+        spectra = self.reference_spectra[(self.reference_spectra['obs_wl_air(mm)'] > Wl_Min) & (self.reference_spectra['obs_wl_air(mm)'] < Wl_Max)]
+
+        # Sort the spectra by wavelength and convert the wavelengths and intensities to a numpy array
+        spectra = spectra.sort_values(by = 'obs_wl_air(mm)')
         NIST_wavelengths = spectra['obs_wl_air(mm)'].to_numpy()
+        intensities = spectra['intens'].to_numpy()
 
         # Sort the approximate wavelengths and NIST wavelengths to make matching possible through the Numpy searchsorted function
         lambda_0 = np.sort(lambda_0)
-        NIST_wavelengths = np.sort(NIST_wavelengths)
 
         # Create a distance matrix which keeps track of the absolute difference between the computed wavelengths (lambda_0) and the reference wavelenghts (NIST)
+        # Then weight the distances by their intensities. For more intense peaks, the weigthed distance become smaller. This ensures we match to the most intense peaks which are the peaks we are detecting
         distances = np.abs(lambda_0[:, None] - NIST_wavelengths[None, :])
+        distances = distances * 1/intensities
 
         # Apply the linear sum assignment algorithm to the distance matrix
         row_ind, col_ind = linear_sum_assignment(distances)
@@ -185,7 +188,7 @@ class WavelengthCalibrator():
     # Function extracts peaks by searching for peaks which have a prominence greater than the minimum
     # The default prominence is set to 0.0005, which means we define a peak as a signal which takes up 0.05% of the area or greater
     # Once peaks are determined, we apply a Gaussian fit to get the most accurate peak center
-    def Extract_Peak_Centers(self, data, prominence = 0.0005):
+    def Extract_Peak_Centers(self, data, prominence):
         # Convert to 32-bit to prevent overflow errors
         data = data.astype(np.float32, copy = False)
 
@@ -199,7 +202,6 @@ class WavelengthCalibrator():
 
         # Determine the Peaks
         peaks, properties = find_peaks(spectrum, prominence = prominence, distance = 15)
-
         peak_centers = []
 
         # Compute a Gaussian Around the Peak
@@ -379,7 +381,13 @@ class WavelengthCalibrator():
         l,w = Spectral_Data.shape
 
         # Extract the Peak Centers from the measured Ne Spectrum
-        spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data)
+        prominences = [0.0005, 0.00025, 0.0001, 0.000075, 0.00005]
+        spectrum = []
+        P_measured = []
+        for p in prominences:
+            spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data, prominence = p)
+            if(len(P_measured) >= 4):
+                break
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
         # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
@@ -395,7 +403,7 @@ class WavelengthCalibrator():
             lambda_0 = self.Get_Wavelength_From_Pixel(self.k, self.n, self.F, self.Dv, self.gamma, self.Pw, self.Pc, self.lambda_c, P_measured)
 
             # Utilizing the Minimum and Maximum Wavelength as Bounds, Find the Best Fit NIST Reference Lines to the Current Computed Wavelengths
-            lambda_ref = self.Process_Reference_Spectra(lambda_0, self.Wl_Min, self.Wl_Max, self.transition_probability_threshold, self.intensity_threshold)
+            lambda_ref = self.Process_Reference_Spectra(lambda_0, self.Wl_Min, self.Wl_Max)
 
             # Initialize the Parameters to be Utilized in the Least Squares Fit
             # The Parameters to be Fit are the Central Pixel Position, the Deviation Angle, and the Tilt Angle as these are the most likely to be deviated from stated values
@@ -566,7 +574,6 @@ class CameraImageProvider(QQuickImageProvider):
 class CameraWorker(QObject):
     frameReady = Signal(QImage)  # for display
     spectrumReady = Signal(object, object)  # wavelength, intensity
-    brightestClusterFound = Signal(int, int)
     standardCaptureFinished = Signal()
     captureBackgroundFinished = Signal()
     finished = Signal()
@@ -645,9 +652,9 @@ class CameraWorker(QObject):
     @Slot()
     def start(self):
         self.isThreadRunning = True
-        self.timer.start(500)
-        self.save_timer.start(2000)  # write at 20 Hz
-        self.spectrum_timer.start(200)  # 5 Hz
+        self.timer.start(300 * 1.1) # Display at an exposure time of 300
+        self.save_timer.start(1500)  # write every 5 frames
+        self.spectrum_timer.start(300 * 1.1)  # Plot at the display rate
 
     @Slot()
     def stop(self):
@@ -788,53 +795,6 @@ class CameraWorker(QObject):
 
         wavelength, intensity = self.wavelength_calibrator.Get_Calibrated_Wavelength_Intensity_From_Pixel(self.latest_frame)
         self.spectrumReady.emit(wavelength, intensity)
-
-    @Slot()
-    def find_brightest_cluster(self):
-        if self.latest_frame is None:
-            return
-
-        # Ensure safe type
-        frame = self.latest_frame.astype(np.float64, copy=False)
-
-        # Create a threshold, anything with brightness below this threshold will not be taken into account
-        intensity_threshold = 0.9 * frame.max()
-        mask = frame > intensity_threshold
-
-        # Break up all connected pixels into clusters
-        labels, num_labels = ndimage.label(mask)
-
-        # Get the number of pixels in each labeled cluster
-        sizes = np.array(ndimage.sum(mask, labels, range(1, num_labels+1)))  # exclude label 0 (background)
-
-        # Filter out tiny clusters
-        min_size = 1000  # ignore clusters smaller than 1000 pixels
-        keep_labels = np.where(sizes >= min_size)[0] + 1  # +1 because labels start at 1
-
-        # Find the label of the cluster which has the most intensity. Cycle through each cluster and sum the intensity of each of its pixels.
-        # This is a function of number of pixels and of raw intensity
-        best_label = None
-        best_power = -1
-        for label in keep_labels:
-            blob_mask = labels == label
-            power = frame[blob_mask].sum()
-            if power > best_power:
-                best_power = power
-                best_label = label
-
-        if best_label == None:
-            return
-
-        # Get the brightest cluster and get all its pixels' x,y coordinates
-        brightest_cluster = frame * (labels == best_label)
-        ys, xs = np.indices(frame.shape)
-
-        # Compute the centroid of the brightest cluster
-        xc = (brightest_cluster * xs).sum() / brightest_cluster.sum()
-        yc = (brightest_cluster * ys).sum() / brightest_cluster.sum()
-
-        # Send the most intense cluster centroid position to the QML Display
-        self.brightestClusterFound.emit(xc, yc)
 
     @Slot(int, float, float, float)
     def set_wavelength_calibration_variables(self, Pc, Dv, gamma, lambda_c):
@@ -1104,12 +1064,12 @@ class CameraWorker(QObject):
         self.exposure = exposure
 
         # Get a new time step for the display timer
-        period_ms = max(1, int(self.exposure * 1.1))
+        #period_ms = max(1, int(self.exposure * 1.1))
 
-        if self.timer.isActive():
-            self.timer.stop()
+        #if self.timer.isActive():
+        #    self.timer.stop()
 
-        self.timer.start(period_ms)
+        #self.timer.start(period_ms)
 
 
     @Slot(int)
@@ -1137,7 +1097,6 @@ class CameraWorker(QObject):
 class CameraController(QObject):
     # User Interface Signals
     frameReady = Signal(QImage)
-    brightestClusterFound = Signal(int, int)
     gainRangeChanged = Signal(int, int)
     exposureRangeChanged = Signal(int, int)
     tempRangeChanged = Signal(int, int)
@@ -1167,7 +1126,6 @@ class CameraController(QObject):
 
     # Worker Signals
     calibrationVariablesRequested = Signal(int, float, float, float)
-    brightestClusterRequested = Signal()
     gainRequested = Signal(int)
     exposureRequested = Signal(int)
     targetTempRequested = Signal(int)
@@ -1219,7 +1177,7 @@ class CameraController(QObject):
         # Camera Controls
         controls = self.cam.get_controls()
         self.exposure_min = controls['Exposure']['MinValue']//1000
-        self.exposure_max = min(controls['Exposure']['MaxValue']//1000, 5000)
+        self.exposure_max = min(controls['Exposure']['MaxValue']//1000, 60000)
         self.gain_min = max(controls['Gain']['MinValue'], 0)
         self.gain_max = controls['Gain']['MaxValue']
 
@@ -1273,10 +1231,6 @@ class CameraController(QObject):
         self.gainRangeChanged.emit(self.gain_min, self.gain_max)
         self.tempRangeChanged.emit(self.temp_min, self.temp_max)
 
-    @Slot()
-    def find_brightest_cluster_requested(self):
-        self.brightestClusterRequested.emit()
-
     @Slot(int)
     def setNBackgroundFrames(self, n):
         self.background_n_frames = n
@@ -1287,7 +1241,7 @@ class CameraController(QObject):
 
     @Slot(int)
     def setExposure(self, ms):
-        self.cam.set_control_value(self.control_types['Exposure'], max(1000, ms*1000))
+        self.cam.set_control_value(self.control_types['Exposure'], min(60000 * 1000, ms * 1000)) # Converting time to microseconds (What the camera controller expects)
         self.exposureRequested.emit(ms)
 
     @Slot(int)
@@ -1709,12 +1663,10 @@ class CameraController(QObject):
         self.standardCaptureRequested.connect(self.camera_worker.start_standard_capture)
         self.snapshotRequested.connect(self.camera_worker.capture_snapshot)
         self.saveSnapshotRequested.connect(self.camera_worker.save_snapshot)
-        self.brightestClusterRequested.connect(self.camera_worker.find_brightest_cluster)
 
         # Connect all functions that the Camera Worker needs access to within the Camera Controller
         self.camera_worker.standardCaptureFinished.connect(self.end_standard_capture)
         self.camera_worker.captureBackgroundFinished.connect(self.capture_background_complete)
-        self.camera_worker.brightestClusterFound.connect(self.brightestClusterFound.emit)
 
         # When finished, stop the thread, delete the camera worker, and delete the thread
         self.camera_worker.finished.connect(self.camera_thread.quit)

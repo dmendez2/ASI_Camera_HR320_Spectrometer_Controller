@@ -58,20 +58,10 @@ Window {
             cache: false
         }
 
-        TapHandler {
-            acceptedButtons: Qt.LeftButton
-            onDoubleTapped: cameraController.find_brightest_cluster_requested()
-        }
-
         Connections {
             target: cameraController
             function onFrameReady(frame) {
                 liveFeed.source = "image://camera/live?" + Date.now()
-            }
-
-            function onBrightestClusterFound(x, y) {
-                imageFlick.contentX = Math.max(0, x - imageFlick.width / 2)
-                imageFlick.contentY = Math.max(0, y - imageFlick.height / 2)
             }
         }
     }
