@@ -256,6 +256,17 @@ class WavelengthCalibrator():
         return  wavelength, intensity
 
     # Utilizing Equations from "The Optics of Spectroscopy" by J.M. Lerner and A. Thevenon to Compute the Wavelength For a Given Pixel Detection
+    def Get_Calibrated_Wavelength_From_Pixel(self, P_lambda):
+        alpha = self.Alpha(self.k, self.n, self.Dv, self.lambda_c)
+        beta_lambda_c = self.Beta(self.k, self.n, alpha, self.lambda_c)
+        beta_h = self.Beta_H(beta_lambda_c, self.gamma)
+        Lh = self.LH(self.F, self.gamma)
+        Hb_lambda_c = self.HB_Lambda_C(self.F, self.gamma)
+        Hb_lambda_n = self.HB_Lambda_N_From_Pixel(self.Pw, P_lambda, self.Pc, Hb_lambda_c)
+        beta_lambda_n = self.Beta_Lambda_N(beta_h, Hb_lambda_n, Lh)
+        return self.Get_Wavelength(self.k, self.n, alpha, beta_lambda_n)*1e6
+
+    # Utilizing Equations from "The Optics of Spectroscopy" by J.M. Lerner and A. Thevenon to Compute the Wavelength For a Given Pixel Detection
     def Get_Wavelength_From_Pixel(self, k, n, F, Dv, gamma, Pw, Pc, lambda_c, P_lambda):
         alpha = self.Alpha(k, n, Dv, lambda_c)
         beta_lambda_c = self.Beta(k, n, alpha, lambda_c)
@@ -366,7 +377,7 @@ class WavelengthCalibrator():
         self.lambda_c = lambda_c*1e-6
 
         # Preprocess the NIST Reference Spectra
-        self.reference_spectra = pd.read_csv(Nist_Reference_Path)[['obs_wl_air(nm)', 'intens', 'Aki(s^-1)']].astype(float).dropna() # Reference Ne I spectral line wavelength --> From NIST (nm)
+        self.reference_spectra = pd.read_csv(Nist_Reference_Path)[['obs_wl_air(nm)', 'intens']].astype(float).dropna() # Reference Ne I spectral line wavelength --> From NIST (nm)
         self.reference_spectra['obs_wl_air(nm)'] *= 1e-6 # Convert wavelengths to millimeters for later calculations (mm)
         self.reference_spectra.rename(columns = {'obs_wl_air(nm)': 'obs_wl_air(mm)'}, inplace = True) # Rename column to reflect unit change
 
@@ -736,9 +747,9 @@ class CameraWorker(QObject):
                 self.captureBackgroundFinished.emit()
             else:
                 if self.background is None:
-                    self.background = frame.astype(np.float32)
+                    self.background = frame.copy().astype(np.float32)
                 else:
-                    self.background += frame.astype(np.float32)
+                    self.background += frame.copy().astype(np.float32)
                 self.background_n_frames_start += 1
 
         if self.background is not None and self.subtraction_enabled and self.background_n_frames_end == 0:
@@ -1205,7 +1216,7 @@ class CameraController(QObject):
         self.Nist_Reference_Path = None
         self.Spectral_Data_Path = None
 
-        self.min_wavelength = 400
+        self.min_wavelength = 300
         self.approximate_central_wavelength = 700
         self.max_wavelength = 1000
         self.mean_residual = None

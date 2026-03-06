@@ -1023,9 +1023,9 @@ Window {
                         font.pixelSize: 14
                         stepSize: 1.0
                         editable: true
-                        from: 400
+                        from: 300
                         to: 1000
-                        value: 700
+                        value: 600
 
                         onValueChanged: {
                             centralWavelengthSpinBox.value = value
