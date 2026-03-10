@@ -17,10 +17,10 @@ Window {
     property string standardCaptureSavePath: "path/to/data/file.hdf5"
     property string liveCaptureSavePath: "path/to/data/file.hdf5"
     property string backgroundLoadPath: "path/to/data/file.npy"
-    property string nistReferenceFilePath: "path/to/data/file.npy"
-    property string heNeFilePath: "path/to/data/file.npy"
-    property string neAnchorFilePath: "path/to/data/file.npy"
+    property string nistReferenceFilePath: "path/to/data/file.csv"
+    property string shiftedNistReferenceFilePath: "path/to/data/file.csv"
     property string neCalibrationFilePath: "path/to/data/file.npy"
+    property string shiftedCalibrationFilePath: "path/to/data/file.npy"
     property string saveCachePath: "path/to/cache/file.csv"
     property string loadCachePath: "path/to/cache/file.csv"
 
@@ -1010,6 +1010,83 @@ Window {
                     }
                 }
 
+                // Choice: Standard Calibration or Wavelength Shift
+                Row {
+                    spacing: masterControlColumn.width/12
+                    RadioButton {
+                        id: standardCalibrationMode
+                        checked: true
+
+                        indicator: Rectangle {
+                            id: calibrationCircle
+                            anchors.verticalCenter: standardCalibrationMode.verticalCenter
+                            implicitWidth: 20
+                            implicitHeight: 20
+                            radius: width / 2
+                            border.width: 2
+                            border.color: "#555555"
+                            color: "transparent"
+
+                            Rectangle {
+                                anchors.centerIn: calibrationCircle
+                                width: calibrationCircle.width / 2
+                                height: calibrationCircle.height / 2
+                                radius: width / 2
+                                color: standardCalibrationMode.checked ? "#cdcdcd" : "transparent"
+                            }
+                        }
+
+                        contentItem: Text {
+                            text: "Standard Calibration"
+                            color: "#cdcdcd"
+                            font.bold: true
+                            font.pixelSize: 14
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: standardCalibrationMode.indicator.width + 6
+                        }
+
+                        onClicked:{
+                            cameraController.setStandardCalibrationStatus(true)
+                        }
+                    }
+
+                    RadioButton {
+                        id: wavelengthShiftMode
+
+                        indicator: Rectangle {
+                            id: wavelengthShiftCircle
+                            anchors.verticalCenter: wavelengthShiftMode.verticalCenter
+                            implicitWidth: 20
+                            implicitHeight: 20
+                            radius: width / 2
+                            border.width: 2
+                            border.color: "#555555"
+                            color: "transparent"
+
+                            Rectangle {
+                                anchors.centerIn: wavelengthShiftCircle
+                                width: wavelengthShiftCircle.width / 2
+                                height: wavelengthShiftCircle.height / 2
+                                radius: width / 2
+                                color: wavelengthShiftMode.checked ? "#cdcdcd" : "transparent"
+                            }
+                        }
+
+                        contentItem: Text {
+                            text: "Wavelength Shift"
+                            color: "#cdcdcd"
+                            font.bold: true
+                            font.pixelSize: 14
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: wavelengthShiftMode.indicator.width + 6
+                        }
+
+                        onClicked:{
+                            cameraController.setStandardCalibrationStatus(false)
+                        }
+                    }
+                }
+
                 RowLayout{
                     Text{
                         text: "Estimated Central Wavelength (nm):"
@@ -1030,6 +1107,31 @@ Window {
                         onValueChanged: {
                             centralWavelengthSpinBox.value = value
                             cameraController.setCentralWavelength(value)
+                        }
+                    }
+                }
+
+                RowLayout{
+                    visible: wavelengthShiftMode.checked
+                    Text{
+                        text: "Estimated Shifted Wavelength (nm):"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    SpinBox {
+                        id: shiftedWavelengthSpinBox
+                        font.pixelSize: 14
+                        stepSize: 1.0
+                        editable: true
+                        from: 300
+                        to: 1000
+                        value: 600
+
+                        onValueChanged: {
+                            shiftedWavelengthSpinBox.value = value
+                            cameraController.setShiftedWavelength(value)
                         }
                     }
                 }
@@ -1065,6 +1167,36 @@ Window {
 
                 RowLayout {
                     spacing: 20
+                    visible: wavelengthShiftMode.checked
+                    width: masterControlColumn.width * 0.9
+
+                    Button {
+                        id: shifted_nist_reference_button
+                        text: "Load Shifted Reference Data"
+                        onClicked: shifted_nist_reference_fileDialog.open()
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: shifted_nist_reference_button.height
+                        radius: 4
+                        border.color: "#888"
+                        color: "#f5f5f5"
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            verticalAlignment: Text.AlignVCenter
+
+                            text: shiftedNistReferenceFilePath
+                            elide: Text.ElideLeft     // Clip path nicely
+                            clip: true
+                        }
+                    }
+                }
+
+                RowLayout {
+                    spacing: 20
                     width: masterControlColumn.width * 0.9
 
                     Button {
@@ -1086,6 +1218,36 @@ Window {
                             verticalAlignment: Text.AlignVCenter
 
                             text: neCalibrationFilePath
+                            elide: Text.ElideLeft     // Clip path nicely
+                            clip: true
+                        }
+                    }
+                }
+
+                RowLayout {
+                    spacing: 20
+                    visible: wavelengthShiftMode.checked
+                    width: masterControlColumn.width * 0.9
+
+                    Button {
+                        id: shifted_spectrum_button
+                        text: "Load Shifted Data to Calibrate"
+                        onClicked: shifted_spectrum_fileDialog.open()
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: shifted_spectrum_button.height
+                        radius: 4
+                        border.color: "#888"
+                        color: "#f5f5f5"
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            verticalAlignment: Text.AlignVCenter
+
+                            text: shiftedCalibrationFilePath
                             elide: Text.ElideLeft     // Clip path nicely
                             clip: true
                         }
@@ -1393,7 +1555,6 @@ Window {
             }
         }
 
-
             FileDialog{
                 id: saveFramesForStandardCaptureFileDialog
                 title: "Save Data To"
@@ -1478,6 +1639,19 @@ Window {
                 }
             }
 
+            FileDialog{
+                id: shifted_nist_reference_fileDialog
+                title: "Select a file"
+                fileMode: FileDialog.OpenFile
+                folder: defaultPaths["NIST"]
+                nameFilters: ["CSV (*.csv)"]
+
+                onAccepted: {
+                    shiftedNistReferenceFilePath = shifted_nist_reference_fileDialog.file.toString()
+                    cameraController.setShiftedNistReferencePath(shiftedNistReferenceFilePath)
+                }
+            }
+
             FileDialog {
                 id: spectrum_fileDialog
                 title: "Select a file"
@@ -1488,6 +1662,19 @@ Window {
                 onAccepted: {
                     neCalibrationFilePath = spectrum_fileDialog.file.toString()
                     cameraController.setNeCalibrationPath(neCalibrationFilePath)
+                }
+            }
+
+            FileDialog {
+                id: shifted_spectrum_fileDialog
+                title: "Select a file"
+                fileMode: FileDialog.OpenFile
+                folder: defaultPaths["spectral_data"]
+                nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
+
+                onAccepted: {
+                    shiftedCalibrationFilePath = shifted_spectrum_fileDialog.file.toString()
+                    cameraController.setShiftedNeCalibrationPath(shiftedCalibrationFilePath)
                 }
             }
 

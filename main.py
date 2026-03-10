@@ -372,7 +372,7 @@ class WavelengthCalibrator():
     # The Center Pixel Position, the Deviation Angle, the central wavelength, and the Tilt Angle are then Varied and Utilized to Compute Pixel Positions Using the Matched Reference Wavelengths
     # Residuals Between the Computed Pixel Position and the True Measured Pixel Positions are then Determined
     # A Least Squares Fit is Conducted to Minimize the Residuals and Find the Best Fit Parameter Combination Which Become the Calibrated Values
-    def Calibrate(self, Spectral_Data_Path, Nist_Reference_Path, lambda_c):
+    def Calibrate(self, Spectral_Data_Path, Nist_Reference_Path, lambda_c, is_standard_calibration = True):
         # Set new central wavelength
         self.lambda_c = lambda_c*1e-6
 
@@ -391,13 +391,21 @@ class WavelengthCalibrator():
         # Get Pixel Dimensions
         l,w = Spectral_Data.shape
 
+        # We require at least 2 peaks to fit for a wavelength shift only since we only vary lambda_c
+        # We require at least 4 peaks for a full calibration since we vary 4 free parameters
+        min_peaks = None
+        if is_standard_calibration:
+            min_peaks = 4
+        else:
+            min_peaks = 2
+
         # Extract the Peak Centers from the measured Ne Spectrum
         prominences = [0.0005, 0.00025, 0.0001, 0.000075, 0.00005]
         spectrum = []
         P_measured = []
         for p in prominences:
             spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data, prominence = p)
-            if(len(P_measured) >= 4):
+            if(len(P_measured) >= min_peaks):
                 break
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
@@ -418,15 +426,16 @@ class WavelengthCalibrator():
 
             # Initialize the Parameters to be Utilized in the Least Squares Fit
             # The Parameters to be Fit are the Central Pixel Position, the Deviation Angle, and the Tilt Angle as these are the most likely to be deviated from stated values
+            # Only vary Pc, Dv, and Gamma if its a full calibration
             params = Parameters()
             params.add('k', value = self.k, vary = False)
             params.add('n', value = self.n, vary = False)
             params.add('F', value = self.F, vary = False)
             params.add('Pw', value = self.Pw, vary = False)
             params.add('lambda_c', value = self.lambda_c, vary = True, min = self.lambda_c - self.lambda_c*0.01, max = self.lambda_c + self.lambda_c*0.01)
-            params.add('Pc', value = self.Pc, vary = True, min = self.Pc - self.Pc*0.1, max = self.Pc + self.Pc*0.1)
-            params.add('Dv', value = self.Dv, vary = True, min = self.Dv - self.Dv*0.2, max = self.Dv + self.Dv*0.2)
-            params.add('gamma', value = self.gamma, vary = True, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
+            params.add('Pc', value = self.Pc, vary = is_standard_calibration, min = self.Pc - self.Pc*0.1, max = self.Pc + self.Pc*0.1)
+            params.add('Dv', value = self.Dv, vary = is_standard_calibration, min = self.Dv - self.Dv*0.2, max = self.Dv + self.Dv*0.2)
+            params.add('gamma', value = self.gamma, vary = is_standard_calibration, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
 
             # Compute the Fit by Miniimizing the Square of the Residual
             least_squares_fitter = minimize(self.residual, params, args=(P_measured, lambda_ref), method = "least_squares")
@@ -454,6 +463,8 @@ class WavelengthCalibrator():
             return True, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
         else:
             return False, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
+
+
 
 class SpectrumPlot(QWidget):
     def __init__(self):
@@ -617,7 +628,6 @@ class CameraWorker(QObject):
 
         self.save_raw_enabled = False
         self.save_wavelength_enabled = False
-
 
         self.standard_capture_path = None
         self.standard_capture_n_frames_start = 0
@@ -943,24 +953,23 @@ class CameraWorker(QObject):
                 self.h5file.attrs["background_frames_averaged"] = self.background_n_frames_averaged
 
         ### Calibration Attributes ###
-        if self.save_wavelength_enabled:
+        if self.isCalibrated:
             self.h5file.attrs["wavelength_calibration_applied"] = self.isCalibrated
-            if self.isCalibrated:
-                self.h5file.attrs["central_pixel"] = self.Pc
-                self.h5file.attrs["deviation_angle (rads)"] = self.Dv
-                self.h5file.attrs["tilt_angle (rads)"] = self.gamma
-                self.h5file.attrs["central_wavelength (nm)"] = self.lambda_c
+            self.h5file.attrs["central_pixel"] = self.Pc
+            self.h5file.attrs["deviation_angle (rads)"] = self.Dv
+            self.h5file.attrs["tilt_angle (rads)"] = self.gamma
+            self.h5file.attrs["central_wavelength (nm)"] = self.lambda_c
 
-                self.h5file.attrs["deviation_angle (degrees)"] = self.Dv * 180/np.pi
-                self.h5file.attrs["tilt_angle (degrees)"] = self.gamma * 180/np.pi
+            self.h5file.attrs["deviation_angle (degrees)"] = self.Dv * 180/np.pi
+            self.h5file.attrs["tilt_angle (degrees)"] = self.gamma * 180/np.pi
 
-                if (self.max_residual is None) and (self.mean_residual is None) and (self.num_lines_calibrated) is None:
-                    self.h5file.attrs["wavelength_calibration_source"] = "loaded"
-                else:
-                    self.h5file.attrs["wavelength_calibration_source"] = "computed"
-                    self.h5file.attrs["wavelength_calibration_mean_residual (nm)"] = self.mean_residual
-                    self.h5file.attrs["wavelength_calibration_max_residual (nm)"] = self.max_residual
-                    self.h5file.attrs["num_lines_calibrated"] = self.num_lines_calibrated
+            if (self.max_residual is None) and (self.mean_residual is None) and (self.num_lines_calibrated) is None:
+                self.h5file.attrs["wavelength_calibration_source"] = "loaded"
+            else:
+                self.h5file.attrs["wavelength_calibration_source"] = "computed"
+                self.h5file.attrs["wavelength_calibration_mean_residual (nm)"] = self.mean_residual
+                self.h5file.attrs["wavelength_calibration_max_residual (nm)"] = self.max_residual
+                self.h5file.attrs["num_lines_calibrated"] = self.num_lines_calibrated
 
         ### Capture Type Attributes ###
         self.h5file.attrs["frames_flipped"] = True
@@ -1212,12 +1221,17 @@ class CameraController(QObject):
         self.calibrationStatus = False
         self.calibration_save_enabled = False # Only true after a calibration has been initiated
         self.isCalibrationReadyToUse = False
+        self.isStandardCalibration = True
 
-        self.Nist_Reference_Path = None
-        self.Spectral_Data_Path = None
+        self.Standard_Calibration_Nist_Reference_Path = None
+        self.Standard_Calibration_Spectral_Data_Path = None
+
+        self.Wavelength_Shift_Nist_Reference_Path = None
+        self.Wavelength_Shift_Spectral_Data_Path = None
 
         self.min_wavelength = 300
-        self.approximate_central_wavelength = 700
+        self.approximate_central_wavelength = 600
+        self.shifted_central_wavelength = 600
         self.max_wavelength = 1000
         self.mean_residual = None
         self.max_residual = None
@@ -1292,7 +1306,33 @@ class CameraController(QObject):
             self.errorOccurred.emit("Error setting anti-dew heater: ", e)
 
     def isCalibrationReady(self):
-        return (self.Nist_Reference_Path is not None) and (self.Spectral_Data_Path is not None)
+        return (self.Standard_Calibration_Nist_Reference_Path is not None) and (self.Standard_Calibration_Spectral_Data_Path is not None)
+
+    def isWavelengthShiftReady(self):
+        return (self.Standard_Calibration_Nist_Reference_Path is not None) and (self.Standard_Calibration_Spectral_Data_Path is not None) and (self.Wavelength_Shift_Nist_Reference_Path is not None) and (self.Wavelength_Shift_Spectral_Data_Path is not None)
+
+    @Slot(bool)
+    def setStandardCalibrationStatus(self, status):
+        self.isStandardCalibration = status
+
+        if(self.isStandardCalibration):
+            if(self.isCalibrationReady()):
+                self.canCalibrate.emit(True)
+            else:
+                self.canCalibrate.emit(False)
+        else:
+            if(self.isWavelengthShiftReady()):
+                self.canCalibrate.emit(True)
+            else:
+                self.canCalibrate.emit(False)
+
+    @Slot(int)
+    def setCentralWavelength(self, approximate_wavelength):
+        self.approximate_central_wavelength = approximate_wavelength
+
+    @Slot(int)
+    def setShiftedWavelength(self, approximate_wavelength):
+        self.shifted_central_wavelength = approximate_wavelength
 
     @Slot(str)
     def setNistReferencePath(self, qt_file_path):
@@ -1310,9 +1350,34 @@ class CameraController(QObject):
 
         # Assign the path to the Helium Neon Line Data to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
-        self.Nist_Reference_Path = file_path
-        if(self.isCalibrationReady()):
-            self.canCalibrate.emit(True)
+        self.Standard_Calibration_Nist_Reference_Path = file_path
+        if(self.isStandardCalibration):
+            if(self.isCalibrationReady()):
+                self.canCalibrate.emit(True)
+        else:
+            if(self.isWavelengthShiftReady()):
+                self.canCalibrate.emit(True)
+
+    @Slot(str)
+    def setShiftedNistReferencePath(self, qt_file_path):
+        url = QUrl(qt_file_path)
+        file_path = ""
+        if url.isValid():
+            file_path = url.toLocalFile()
+        else:
+            self.errorOccurred.emit("Error, File Path Not Valid")
+            return
+
+        # Ensure correct extension
+        if not file_path.endswith(".csv"):
+            file_path += ".csv"
+
+        # Assign the path to the Helium Neon Line Data to the input file path.
+        # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
+        self.Wavelength_Shift_Nist_Reference_Path = file_path
+        if(not self.isStandardCalibration):
+            if(self.isWavelengthShiftReady()):
+                self.canCalibrate.emit(True)
 
     @Slot(str)
     def setNeCalibrationPath(self, qt_file_path):
@@ -1331,13 +1396,35 @@ class CameraController(QObject):
 
         # Assign the path to the Neon Data we need to calibrate to the input file path.
         # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
-        self.Spectral_Data_Path = file_path
-        if(self.isCalibrationReady()):
-            self.canCalibrate.emit(True)
+        self.Standard_Calibration_Spectral_Data_Path = file_path
+        if(self.isStandardCalibration):
+            if(self.isCalibrationReady()):
+                self.canCalibrate.emit(True)
+        else:
+            if(self.isWavelengthShiftReady()):
+                self.canCalibrate.emit(True)
 
-    @Slot(int)
-    def setCentralWavelength(self, approximate_wavelength):
-        self.approximate_central_wavelength = approximate_wavelength
+    @Slot(str)
+    def setShiftedNeCalibrationPath(self, qt_file_path):
+        url = QUrl(qt_file_path)
+        file_path = ""
+        if url.isValid():
+            file_path = url.toLocalFile()
+        else:
+            self.errorOccurred.emit("Error, File Path Not Valid")
+            return
+
+        # Ensure correct extension
+        if not (file_path.endswith(".npy") or file_path.endswith(".tiff") or file_path.endswith(".tif")):
+            self.errorOccurred.emit("Unsupported file path")
+            return
+
+        # Assign the path to the Neon Data we need to calibrate to the input file path.
+        # Then check if all other file paths have been inputted and the central wavelength set. If yes, let UI know that user can initiate calibration
+        self.Wavelength_Shift_Spectral_Data_Path = file_path
+        if(not self.isStandardCalibration):
+            if(self.isWavelengthShiftReady()):
+                self.canCalibrate.emit(True)
 
     @Slot()
     def calibrateCamera(self):
@@ -1345,7 +1432,9 @@ class CameraController(QObject):
             self.errorOccurred.emit("Cannot calibrate while acquiring data")
         else:
             self.wavelength_calibrator.Reset()
-            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Spectral_Data_Path, self.Nist_Reference_Path, self.approximate_central_wavelength)
+            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Standard_Calibration_Spectral_Data_Path, self.Standard_Calibration_Nist_Reference_Path, self.approximate_central_wavelength, is_standard_calibration = True)
+            if(not self.isStandardCalibration):
+                self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Wavelength_Shift_Spectral_Data_Path, self.Wavelength_Shift_Nist_Reference_Path, self.shifted_central_wavelength, is_standard_calibration = False)
             self.min_wavelength, self.max_wavelength = self.wavelength_calibrator.Get_Wavelength_Range()
 
             if self.calibrationStatus:
