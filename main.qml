@@ -19,7 +19,7 @@ Window {
     property string backgroundLoadPath: "path/to/data/file.npy"
     property string nistReferenceFilePath: "path/to/data/file.csv"
     property string shiftedNistReferenceFilePath: "path/to/data/file.csv"
-    property string neCalibrationFilePath: "path/to/data/file.npy"
+    property string spectralCalibrationFilePath: "path/to/data/file.npy"
     property string shiftedCalibrationFilePath: "path/to/data/file.npy"
     property string saveCachePath: "path/to/cache/file.csv"
     property string loadCachePath: "path/to/cache/file.csv"
@@ -1217,7 +1217,7 @@ Window {
                             anchors.margins: 4
                             verticalAlignment: Text.AlignVCenter
 
-                            text: neCalibrationFilePath
+                            text: spectralCalibrationFilePath
                             elide: Text.ElideLeft     // Clip path nicely
                             clip: true
                         }
@@ -1660,8 +1660,8 @@ Window {
                 nameFilters: ["Numpy Matrix (*.npy)", "TIFF (*.tiff)", "TIF (*.tif)"]
 
                 onAccepted: {
-                    neCalibrationFilePath = spectrum_fileDialog.file.toString()
-                    cameraController.setNeCalibrationPath(neCalibrationFilePath)
+                    spectralCalibrationFilePath = spectrum_fileDialog.file.toString()
+                    cameraController.setSpectralCalibrationPath(spectralCalibrationFilePath)
                 }
             }
 
@@ -1674,7 +1674,7 @@ Window {
 
                 onAccepted: {
                     shiftedCalibrationFilePath = shifted_spectrum_fileDialog.file.toString()
-                    cameraController.setShiftedNeCalibrationPath(shiftedCalibrationFilePath)
+                    cameraController.setShiftedSpectralCalibrationPath(shiftedCalibrationFilePath)
                 }
             }
 

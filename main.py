@@ -487,6 +487,9 @@ class SpectrumPlot(QWidget):
         self.plot.showGrid(x=True, y=True)
         self.plot.setBackground('k')
 
+        # Disable automatic SI scaling (prevents nm → knm)
+        self.plot.getAxis('bottom').enableAutoSIPrefix(False)
+
         # Add text to follow the mouse which will display the wavelength
         self.plot.setMouseEnabled(x = True, y = False)
         self.text = pg.TextItem(color='w', anchor=(0, 1))
@@ -1380,7 +1383,7 @@ class CameraController(QObject):
                 self.canCalibrate.emit(True)
 
     @Slot(str)
-    def setNeCalibrationPath(self, qt_file_path):
+    def setSpectralCalibrationPath(self, qt_file_path):
         url = QUrl(qt_file_path)
         file_path = ""
         if url.isValid():
@@ -1405,7 +1408,7 @@ class CameraController(QObject):
                 self.canCalibrate.emit(True)
 
     @Slot(str)
-    def setShiftedNeCalibrationPath(self, qt_file_path):
+    def setShiftedSpectralCalibrationPath(self, qt_file_path):
         url = QUrl(qt_file_path)
         file_path = ""
         if url.isValid():
