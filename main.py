@@ -112,6 +112,7 @@ class WavelengthCalibrator():
         self.P_Min = 0 # Pixel Number Corresponding to Minimum Wavelength
         self.P_Max = 6247 # Pixel Number Corresponding to Maximum Wavelength
         self.Pc = 1593 # Center Pixel Number (Actual value according to documentation is 3124 but according to measurements done with a He-Ne Laser with single line at 632.8 nm, the true center is at about 1590)
+        self.max_camera_intensity = 65535 # Maximum intensity which the 16-bit Camera can detect
 
         ### Wavelength Parameters ###
         self.lambda_c = None # Central Wavelength of Spectrometer (mm)
@@ -186,22 +187,27 @@ class WavelengthCalibrator():
         return A*np.exp(-(x-P0)**2/(2*sigma**2)) + B
 
     # Function extracts peaks by searching for peaks which have a prominence greater than the minimum
-    # The default prominence is set to 0.0005, which means we define a peak as a signal which takes up 0.05% of the area or greater
     # Once peaks are determined, we apply a Gaussian fit to get the most accurate peak center
-    def Extract_Peak_Centers(self, data, prominence):
+    def Extract_Peak_Centers(self, data, noise_threshold):
         # Convert to 32-bit to prevent overflow errors
         data = data.astype(np.float32, copy = False)
 
         # Collapse 2D CCD data to 1D spectra by taking mean of each column
         # To ensure that we can detect peaks at any gain we normalize such that the integration over the whole spectrum equals 1
         spectrum = np.mean(data, axis = 0)
-        spectrum = spectrum/np.trapezoid(spectrum)
+        spectrum = spectrum/np.max(spectrum)
 
         # Smooth the Data
         spectrum = gaussian_filter1d(spectrum, sigma=1)
 
-        # Determine the Peaks
-        peaks, properties = find_peaks(spectrum, prominence = prominence, distance = 15)
+        # Compute the median absolute deviation (MAD)
+        # The noise level (standard deviation of data) is defined as 1.4826 * MAD
+        mad = np.median(np.abs(spectrum - np.median(spectrum)))
+        noise = 1.4826*mad
+        peak_threshold = noise*noise_threshold
+
+        # Determine the Peaks, set prominence to 20 * noise
+        peaks, properties = find_peaks(spectrum, prominence = peak_threshold, distance = 50)
         peak_centers = []
 
         # Compute a Gaussian Around the Peak
@@ -210,8 +216,8 @@ class WavelengthCalibrator():
         # We Then Take The Gaussian Center as the True Center
         for p in peaks:
             # Choose Window Around Peak
-            lo = max(0, p-5)
-            hi = min(len(spectrum), p+6)
+            lo = max(0, p-7)
+            hi = min(len(spectrum), p+7)
             x = np.arange(lo, hi)
             y = spectrum[x]
 
@@ -235,7 +241,7 @@ class WavelengthCalibrator():
 
         # Convert the intensity column wise
         intensity = np.mean(data, axis = 0)
-        intensity = intensity/np.trapezoid(intensity)
+        intensity = intensity/self.max_camera_intensity # Divide by the max value for a 16-bit array --> 65535
         return intensity
 
     # Utilizing Equations from "The Optics of Spectroscopy" by J.M. Lerner and A. Thevenon to Compute the Wavelength For a Given Pixel Detection
@@ -372,7 +378,7 @@ class WavelengthCalibrator():
     # The Center Pixel Position, the Deviation Angle, the central wavelength, and the Tilt Angle are then Varied and Utilized to Compute Pixel Positions Using the Matched Reference Wavelengths
     # Residuals Between the Computed Pixel Position and the True Measured Pixel Positions are then Determined
     # A Least Squares Fit is Conducted to Minimize the Residuals and Find the Best Fit Parameter Combination Which Become the Calibrated Values
-    def Calibrate(self, Spectral_Data_Path, Nist_Reference_Path, lambda_c, is_standard_calibration = True):
+    def Calibrate(self, Spectral_Data_Path, Nist_Reference_Path, lambda_c, noise_threshold, is_standard_calibration = True):
         # Set new central wavelength
         self.lambda_c = lambda_c*1e-6
 
@@ -391,22 +397,8 @@ class WavelengthCalibrator():
         # Get Pixel Dimensions
         l,w = Spectral_Data.shape
 
-        # We require at least 2 peaks to fit for a wavelength shift only since we only vary lambda_c
-        # We require at least 4 peaks for a full calibration since we vary 4 free parameters
-        min_peaks = None
-        if is_standard_calibration:
-            min_peaks = 4
-        else:
-            min_peaks = 2
-
         # Extract the Peak Centers from the measured Ne Spectrum
-        prominences = [0.0005, 0.00025, 0.0001, 0.000075, 0.00005]
-        spectrum = []
-        P_measured = []
-        for p in prominences:
-            spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data, prominence = p)
-            if(len(P_measured) >= min_peaks):
-                break
+        spectrum, P_measured = self.Extract_Peak_Centers(Spectral_Data, noise_threshold)
 
         # Compute the minimum wavelength that can be resolved from our diffraction grating and ensure the residuals are smaller than it. Set initial residuals to infinity
         # If they are, calibration is complete. Otherwise, if 5 rounds of calibration pass without success, we consider the calibration a failure.
@@ -432,7 +424,7 @@ class WavelengthCalibrator():
             params.add('n', value = self.n, vary = False)
             params.add('F', value = self.F, vary = False)
             params.add('Pw', value = self.Pw, vary = False)
-            params.add('lambda_c', value = self.lambda_c, vary = True, min = self.lambda_c - self.lambda_c*0.01, max = self.lambda_c + self.lambda_c*0.01)
+            params.add('lambda_c', value = self.lambda_c, vary = ~is_standard_calibration, min = self.lambda_c - self.lambda_c*0.01, max = self.lambda_c + self.lambda_c*0.01)
             params.add('Pc', value = self.Pc, vary = is_standard_calibration, min = self.Pc - self.Pc*0.1, max = self.Pc + self.Pc*0.1)
             params.add('Dv', value = self.Dv, vary = is_standard_calibration, min = self.Dv - self.Dv*0.2, max = self.Dv + self.Dv*0.2)
             params.add('gamma', value = self.gamma, vary = is_standard_calibration, min = self.gamma - self.gamma*0.3, max = self.gamma + self.gamma*0.3)
@@ -463,8 +455,6 @@ class WavelengthCalibrator():
             return True, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
         else:
             return False, np.mean(residuals)*1e6, np.max(residuals)*1e6, len(residuals)
-
-
 
 class SpectrumPlot(QWidget):
     def __init__(self):
@@ -1086,15 +1076,6 @@ class CameraWorker(QObject):
     def get_exposure(self, exposure):
         self.exposure = exposure
 
-        # Get a new time step for the display timer
-        #period_ms = max(1, int(self.exposure * 1.1))
-
-        #if self.timer.isActive():
-        #    self.timer.stop()
-
-        #self.timer.start(period_ms)
-
-
     @Slot(int)
     def get_target_temp(self, target_temp):
         self.target_temp = target_temp
@@ -1236,6 +1217,10 @@ class CameraController(QObject):
         self.approximate_central_wavelength = 600
         self.shifted_central_wavelength = 600
         self.max_wavelength = 1000
+
+        self.noise_threshold = 20
+        self.shifted_noise_threshold = 20
+
         self.mean_residual = None
         self.max_residual = None
         self.num_lines_calibrated = None
@@ -1334,8 +1319,16 @@ class CameraController(QObject):
         self.approximate_central_wavelength = approximate_wavelength
 
     @Slot(int)
+    def setNoiseThreshold(self, threshold):
+       self.noise_threshold = threshold
+
+    @Slot(int)
     def setShiftedWavelength(self, approximate_wavelength):
         self.shifted_central_wavelength = approximate_wavelength
+
+    @Slot(int)
+    def setShiftedNoiseThreshold(self, threshold):
+        self.shifted_noise_threshold = threshold
 
     @Slot(str)
     def setNistReferencePath(self, qt_file_path):
@@ -1435,9 +1428,9 @@ class CameraController(QObject):
             self.errorOccurred.emit("Cannot calibrate while acquiring data")
         else:
             self.wavelength_calibrator.Reset()
-            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Standard_Calibration_Spectral_Data_Path, self.Standard_Calibration_Nist_Reference_Path, self.approximate_central_wavelength, is_standard_calibration = True)
+            self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Standard_Calibration_Spectral_Data_Path, self.Standard_Calibration_Nist_Reference_Path, self.approximate_central_wavelength, self.noise_threshold, is_standard_calibration = True)
             if(not self.isStandardCalibration):
-                self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Wavelength_Shift_Spectral_Data_Path, self.Wavelength_Shift_Nist_Reference_Path, self.shifted_central_wavelength, is_standard_calibration = False)
+                self.calibrationStatus, self.mean_residual, self.max_residual, self.num_lines_calibrated = self.wavelength_calibrator.Calibrate(self.Wavelength_Shift_Spectral_Data_Path, self.Wavelength_Shift_Nist_Reference_Path, self.shifted_central_wavelength, self.shifted_noise_threshold, is_standard_calibration = False)
             self.min_wavelength, self.max_wavelength = self.wavelength_calibrator.Get_Wavelength_Range()
 
             if self.calibrationStatus:

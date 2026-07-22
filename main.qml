@@ -7,9 +7,9 @@ import QtQuick.Layouts 1.15
 
 Window {
     visible: true
-    color: "#2e2f30"
     width: 1400
     height: 700
+    color: "#2e2f30"
     title: "ASI Camera Controller"
     Component.onCompleted: cameraController.initialize_controls()
 
@@ -1101,12 +1101,36 @@ Window {
                         stepSize: 1.0
                         editable: true
                         from: 300
-                        to: 1000
+                        to: 1200
                         value: 600
 
                         onValueChanged: {
                             centralWavelengthSpinBox.value = value
                             cameraController.setCentralWavelength(value)
+                        }
+                    }
+                }
+
+                RowLayout{
+                    Text{
+                        text: "Noise Threshold:"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    SpinBox {
+                        id: noiseThresholdSpinBox
+                        font.pixelSize: 14
+                        stepSize: 5.0
+                        editable: true
+                        from: 1
+                        to: 1000
+                        value: 20
+
+                        onValueChanged: {
+                            noiseThresholdSpinBox.value = value
+                            cameraController.setNoiseThreshold(value)
                         }
                     }
                 }
@@ -1126,12 +1150,38 @@ Window {
                         stepSize: 1.0
                         editable: true
                         from: 300
-                        to: 1000
+                        to: 1200
                         value: 600
 
                         onValueChanged: {
                             shiftedWavelengthSpinBox.value = value
                             cameraController.setShiftedWavelength(value)
+                        }
+                    }
+                }
+
+                RowLayout{
+                    visible: wavelengthShiftMode.checked
+
+                    Text{
+                        text: "Shifted Noise Threshold:"
+                        font.bold: true
+                        color: "#cdcdcd"
+                        font.pixelSize: 14
+                    }
+
+                    SpinBox {
+                        id: shiftedNoiseThresholdSpinBox
+                        font.pixelSize: 14
+                        stepSize: 5.0
+                        editable: true
+                        from: 1
+                        to: 1000
+                        value: 20
+
+                        onValueChanged: {
+                            shiftedNoiseThresholdSpinBox.value = value
+                            cameraController.setShiftedNoiseThreshold(value)
                         }
                     }
                 }
@@ -1699,7 +1749,7 @@ Window {
                   nameFilters: ["CSV File (*.csv)", "HDF5 File (*.hdf5)", "H5 File (*.h5)"]
 
                   onAccepted: {
-                      cameraController.loadCalibrationFile( loadCalibrationDialog.file)
+                      cameraController.loadCalibrationFile(loadCalibrationDialog.file)
                       saveCalibration.enabled = false
                   }
               }
